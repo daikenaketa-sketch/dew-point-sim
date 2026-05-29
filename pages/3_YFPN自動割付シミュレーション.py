@@ -16,7 +16,7 @@ st.sidebar.header("【空調・ダクト設定】")
 duct_pos = st.sidebar.selectbox("ダクトボックス(SA)の設置壁", ["上 (Top)", "下 (Bottom)", "左 (Left)", "右 (Right)"])
 airflow = st.sidebar.number_input("エアコン最大風量 (m3/h)", value=1000, step=100)
 
-# --- パネル組み合わせ最適化アルゴリズム（動的計画法） ---
+# --- パネル組み合わせ最適化アルゴリズム ---
 @st.cache_data
 def find_best_combination(target_length):
     panels = [606, 909, 1820]
@@ -38,10 +38,8 @@ def find_best_combination(target_length):
         if l in dp:
             for last_p, combo in dp[l].items():
                 if len(combo) > 0:
-                    # ルール：両端に606サイズは置かない
                     if combo[0] != 606 and combo[-1] != 606:
                         margin = target_length - l
-                        # ルール：ボーダー材（余白）は150mm以上必要（ピッタリ0はOK）
                         if margin >= 150 or margin == 0:
                             return combo, l
     return [], 0
@@ -60,7 +58,6 @@ def calculate_layout(w, d, airflow):
     if num_cols <= 0:
         return None, "部屋の幅が狭すぎてパネルを配置できません。"
         
-    # 左右のボーダー材が150mm以上になるように列数を自動調整
     border_x = (w - (num_cols * 612 - 12)) / 2
     while border_x < 150 and num_cols > 1:
         num_cols -= 1
@@ -74,53 +71,64 @@ def calculate_layout(w, d, airflow):
         return None, "部屋の奥行きが狭すぎてパネルを配置できません。"
         
     combo, combo_len = find_best_combination(available_d)
-    
     if not combo:
         return None, "ルールに適合するパネルの組み合わせが見つかりませんでした。"
         
-    rects = []
-    # 背景：SAメイン流路 (赤)
-    rects.append((0, d - Ds, w, Ds, '#ffcccc', 'SA Main Flow', 1.0))
-    # 背景：RAメイン流路 (青)
-    rects.append((0, 0, w, Dr, '#ccccff', 'RA Main Flow', 1.0))
+    # 描画用データの整理
+    draw_data = {
+        'sa_main': (0, d - Ds, w, Ds),
+        'ra_main': (0, 0, w, Dr),
+        'sub_flows': [],
+        'blocks': [],
+        'panels': [],
+        'borders': []
+    }
+    
+    # ボーダー材（余白）の領域
+    if border_x > 0:
+        draw_data['borders'].append((0, Dr, border_x, d - Ds - Dr))
+        draw_data['borders'].append((w - border_x, Dr, border_x, d - Ds - Dr))
+    if combo_len < (d - Ds - Dr):
+        draw_data['borders'].append((border_x, Dr, w - 2*border_x, (d - Ds - Dr) - combo_len))
+        
+    panel_counts = {606: 0, 909: 0, 1820: 0}
+    block_size = 100 # 仕切材の描画サイズ(mm)
     
     for col in range(num_cols):
-        current_x = border_x + col * 612
+        cx = border_x + col * 612
         
-        # サブ流路の背景色 (SAは赤、RAは青を交互に配置)
-        if col % 2 == 0:
-            rects.append((current_x, Dr, 600, d - Ds - Dr, '#ffe6e6', 'SA Sub', 1.0))
-        else:
-            rects.append((current_x, Dr, 600, d - Ds - Dr, '#e6e6ff', 'RA Sub', 1.0))
+        # サブ流路と仕切材（櫛の歯状の表現）
+        if col % 2 == 0: # SAサブ流路（RA側が行き止まり）
+            draw_data['sub_flows'].append((cx, Dr + block_size, 600, d - Ds - Dr - block_size, 'SA'))
+            draw_data['blocks'].append((cx, Dr, 600, block_size))
+        else: # RAサブ流路（SA側が行き止まり）
+            draw_data['sub_flows'].append((cx, Dr, 600, d - Ds - Dr - block_size, 'RA'))
+            draw_data['blocks'].append((cx, d - Ds - block_size, 600, block_size))
             
-        # ボーダー材 (パネルが届かない余白部分をグレーで描画)
-        if combo_len < (d - Ds - Dr):
-            border_y = Dr
-            border_h = (d - Ds - Dr) - combo_len
-            rects.append((current_x, border_y, 600, border_h, '#e0e0e0', 'Border', 1.0))
-
-    panel_counts = {606: 0, 909: 0, 1820: 0}
-    for col in range(num_cols):
-        current_x = border_x + col * 612
-        current_y = d - Ds
-        
+        # パネルの配置
+        cy = d - Ds
         for p in combo:
-            current_y -= p
-            # パネルは半透明の緑で描画（下の流路を透けさせる）
-            rects.append((current_x, current_y, 600, p, '#ccffcc', f'{p}', 0.8))
+            cy -= p
+            draw_data['panels'].append((cx, cy, 600, p, p))
             panel_counts[p] += 1
-            current_y -= 12 
+            cy -= 12 
             
     return {
-        'rects': rects,
+        'draw_data': draw_data,
         'num_cols': num_cols,
-        'combo': combo,
         'panel_counts': panel_counts,
         'Ds': Ds,
         'Dr': Dr,
         'border_x': border_x,
         'border_y': (d - Ds - Dr) - combo_len
     }, None
+
+# --- 座標回転ヘルパー関数 ---
+def rotate_rect(x, y, w, h, pos, cw, cd):
+    if pos == "上 (Top)": return x, y, w, h
+    if pos == "下 (Bottom)": return x, cd - y - h, w, h
+    if pos == "左 (Left)": return cd - y - h, x, h, w
+    if pos == "右 (Right)": return y, cw - x - w, h, w
 
 # --- 実行ボタン ---
 if st.sidebar.button("割付図を生成する", type="primary"):
@@ -137,23 +145,38 @@ if st.sidebar.button("割付図を生成する", type="primary"):
             fig, ax = plt.subplots(figsize=(10, 10))
             ax.add_patch(patches.Rectangle((0, 0), room_w, room_d, fill=False, edgecolor='black', linewidth=3))
             
-            for (x, y, w, h, color, label, alpha) in result['rects']:
-                if duct_pos == "上 (Top)":
-                    draw_x, draw_y, draw_w, draw_h = x, y, w, h
-                elif duct_pos == "下 (Bottom)":
-                    draw_x, draw_y, draw_w, draw_h = x, calc_d - y - h, w, h
-                elif duct_pos == "左 (Left)":
-                    draw_x, draw_y, draw_w, draw_h = calc_d - y - h, x, h, w
-                elif duct_pos == "右 (Right)":
-                    draw_x, draw_y, draw_w, draw_h = y, calc_w - x - w, h, w
+            d_data = result['draw_data']
+            
+            # 1. メイン流路の描画
+            rx, ry, rw, rh = rotate_rect(*d_data['sa_main'], duct_pos, calc_w, calc_d)
+            ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor='#ff9999', edgecolor='black'))
+            ax.text(rx+rw/2, ry+rh/2, 'SA Main Flow', ha='center', va='center', fontsize=12, fontweight='bold')
+            
+            rx, ry, rw, rh = rotate_rect(*d_data['ra_main'], duct_pos, calc_w, calc_d)
+            ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor='#9999ff', edgecolor='black'))
+            ax.text(rx+rw/2, ry+rh/2, 'RA Main Flow', ha='center', va='center', fontsize=12, fontweight='bold')
+            
+            # 2. サブ流路の描画
+            for x, y, w, h, ftype in d_data['sub_flows']:
+                rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
+                color = '#ffcccc' if ftype == 'SA' else '#ccccff'
+                ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor=color, edgecolor='none'))
                 
-                rect = patches.Rectangle((draw_x, draw_y), draw_w, draw_h, fill=True, facecolor=color, edgecolor='gray', linewidth=1, alpha=alpha)
-                ax.add_patch(rect)
+            # 3. 仕切材（ブロック）の描画
+            for x, y, w, h in d_data['blocks']:
+                rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
+                ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor='#333333', edgecolor='black'))
                 
-                if label and label not in ['SA Sub', 'RA Sub', 'Border']:
-                    text_color = 'black' if 'Main Flow' in label else 'darkgreen'
-                    ax.text(draw_x + draw_w/2, draw_y + draw_h/2, label, 
-                            ha='center', va='center', fontsize=8, color=text_color, fontweight='bold')
+            # 4. ボーダー材の描画（斜線ハッチング）
+            for x, y, w, h in d_data['borders']:
+                rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
+                ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor='#e0e0e0', edgecolor='gray', hatch='//'))
+                
+            # 5. パネルの描画（透明な枠線のみにして下の流路を見せる！）
+            for x, y, w, h, label in d_data['panels']:
+                rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
+                ax.add_patch(patches.Rectangle((rx, ry), rw, rh, fill=False, edgecolor='green', linewidth=2))
+                ax.text(rx+rw/2, ry+rh/2, str(label), ha='center', va='center', fontsize=10, color='darkgreen', fontweight='bold')
 
             ax.set_xlim(-200, room_w + 200)
             ax.set_ylim(-200, room_d + 200)
@@ -161,7 +184,6 @@ if st.sidebar.button("割付図を生成する", type="primary"):
             ax.set_xlabel("Width (mm)")
             ax.set_ylabel("Depth (mm)")
             ax.set_title(f"YFPN Layout / Duct: {duct_pos}")
-            ax.grid(True, linestyle=':', alpha=0.6)
             
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -180,4 +202,12 @@ if st.sidebar.button("割付図を生成する", type="primary"):
                 st.write(f"- **RAメイン流路幅:** {int(result['Dr'])} mm")
                 st.write(f"- **左右ボーダー材幅:** {int(result['border_x'])} mm")
                 st.write(f"- **還流口側ボーダー材幅:** {int(result['border_y'])} mm")
-                st.info("💡 薄い赤がSA（給気）流路、薄い青がRA（還流）流路です。パネル（緑）は流路の上に半透明で配置されています。")
+                
+                st.info("""
+                **【図面の見方】**
+                - 🟩 **緑の枠線**: 床パネル（下が見えるように透明にしています）
+                - 🟥 **赤色**: SA（給気）流路
+                - 🟦 **青色**: RA（還流）流路
+                - ⬛ **黒色**: 流路仕切材（ここで空気が行き止まりになります）
+                - ⬜ **斜線**: ボーダー材（余白）
+                """)
