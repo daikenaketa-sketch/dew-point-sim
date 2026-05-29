@@ -12,17 +12,29 @@ st.markdown("支持脚や目地の隙間（断熱欠損）をウレタン等で�
 # --- サイドバー (入力UI) ---
 st.sidebar.header("【住宅・経済条件】")
 floor_area = st.sidebar.number_input("1階床面積 (㎡)", value=50.0, step=5.0)
-ac_cop = st.sidebar.number_input("エアコンの効率 (COP)", value=4.0, step=0.1)
 elec_price = st.sidebar.number_input("電気料金単価 (円/kWh)", value=30.0, step=1.0)
+
+st.sidebar.header("【空調仕様（実機データ）】")
+st.sidebar.markdown("**❄️ 冷房**")
+cooling_capacity_kW = st.sidebar.number_input("冷房能力 (kW)", value=14.0, step=0.1)
+cooling_power_kW = st.sidebar.number_input("冷房消費電力 (kW)", value=4.77, step=0.01)
+
+st.sidebar.markdown("**🔥 暖房**")
+heating_capacity_kW = st.sidebar.number_input("暖房能力 (kW)", value=16.0, step=0.1)
+heating_power_kW = st.sidebar.number_input("暖房消費電力 (kW)", value=3.98, step=0.01)
+
+# COPの自動計算
+cop_cooling = cooling_capacity_kW / cooling_power_kW if cooling_power_kW > 0 else 1.0
+cop_heating = heating_capacity_kW / heating_power_kW if heating_power_kW > 0 else 1.0
 
 st.sidebar.header("【環境条件設定】")
 st.sidebar.markdown("**冬の暖房時**")
 T_air_w = st.sidebar.number_input("床下温風 (℃)", value=35.0, step=1.0)
-T_ground_w = st.sidebar.number_input("地中温度 (℃)", value=15.0, step=1.0)
+T_ground_w = st.sidebar.number_input("冬の地中温度 (℃)", value=15.0, step=1.0)
 
 st.sidebar.markdown("**夏の冷房時**")
 T_air_s = st.sidebar.number_input("床下冷風 (℃)", value=18.0, step=1.0)
-T_ground_s = st.sidebar.number_input("地中温度 (℃)", value=25.0, step=1.0)
+T_ground_s = st.sidebar.number_input("夏の地中温度 (℃)", value=25.0, step=1.0)
 
 # --- 熱量計算関数 ---
 def calculate_heat_loss(T_air, T_ground, defect_mode="defect"):
@@ -48,7 +60,7 @@ def calculate_heat_loss(T_air, T_ground, defect_mode="defect"):
     for i in range(Nr + 1):
         r = i * dr
         Ui = U_ins if defect_mode == "perfect" else (U_cut if r <= r_cut + 1e-5 else U_ins)
-            
+        
         for j in range(Nz + 1):
             k = idx(i, j)
             lam = lam_c if j <= Nz_c else lam_s
@@ -83,7 +95,7 @@ def calculate_heat_loss(T_air, T_ground, defect_mode="defect"):
         if i == 0: area = math.pi * (dr/2)**2
         elif i == Nr: area = math.pi * (r**2 - (r - dr/2)**2)
         else: area = math.pi * ((r + dr/2)**2 - (r - dr/2)**2)
-            
+        
         Ui = U_ins if defect_mode == "perfect" else (U_cut if r <= r_cut + 1e-5 else U_ins)
         T_surface = T_steady[i, 0]
         heat_flux = Ui * (T_air - T_surface) * area
@@ -106,16 +118,18 @@ if st.sidebar.button("シミュレーション実行", type="primary"):
         heat_w_def = calculate_heat_loss(T_air_w, T_ground_w, "defect")
         diff_w = heat_w_def - heat_w_perf
         inc_w_pct = (heat_w_def / heat_w_perf - 1.0) * 100
-        tot_w, pow_w, cost_w = calculate_electricity_cost(diff_w, floor_area, ac_cop, elec_price)
+        tot_w, pow_w, cost_w = calculate_electricity_cost(diff_w, floor_area, cop_heating, elec_price)
 
         # 夏の計算
         heat_s_perf = abs(calculate_heat_loss(T_air_s, T_ground_s, "perfect"))
         heat_s_def = abs(calculate_heat_loss(T_air_s, T_ground_s, "defect"))
         diff_s = heat_s_def - heat_s_perf
         inc_s_pct = (heat_s_def / heat_s_perf - 1.0) * 100
-        tot_s, pow_s, cost_s = calculate_electricity_cost(diff_s, floor_area, ac_cop, elec_price)
+        tot_s, pow_s, cost_s = calculate_electricity_cost(diff_s, floor_area, cop_cooling, elec_price)
 
         # --- 結果表示 ---
+        st.info(f"💡 **自動計算されたCOP** ｜ 冷房COP: **{cop_cooling:.2f}** / 暖房COP: **{cop_heating:.2f}**")
+        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -145,7 +159,8 @@ if st.sidebar.button("シミュレーション実行", type="primary"):
         # 結論パネル
         st.success(f"""
         **【結論：なぜウレタンで塞がなくても良いのか？】**  
-        悪化率だけを見ると数％〜十数％と大きく見えますが、実際の電気代への影響は、**冬で月額約 {int(cost_w)} 円、夏で月額約 {int(cost_s)} 円** にとどまります。  
+        断熱性能の悪化率は {inc_w_pct:.1f}% となりますが、実際の空調機の性能（COP）を考慮した電気代への影響は、
+        **冬の暖房時で月額約 {int(cost_w)} 円、夏の冷房時で月額約 {int(cost_s)} 円** にすぎません。  
         これは、スラブ下の『地盤（土）』自体が巨大な断熱材として機能しているためです。  
         ウレタン等で塞ぐための材料費や職人の手間賃（数万円〜）を考慮すると、**費用対効果（コストメリット）が全く合わないため、塞がなくても実質的な問題はありません。**
         """)
