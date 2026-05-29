@@ -4,7 +4,7 @@ import matplotlib.patches as patches
 
 # --- ページ設定 ---
 st.set_page_config(page_title="YFPN 自動割付シミュレーション", layout="wide")
-st.title("📐 ユカリラ YFPN 自動割付シミュレーション")
+st.title("📐 ユカリラ YFPN 自動割付シミュレーション 【流路・パネル孔 再現版】")
 st.markdown("部屋の寸法とダクトボックス（SA）の位置を入力するだけで、マニュアルのルールに従った最適なパネル割付図を自動生成します。")
 
 # --- サイドバー (入力UI) ---
@@ -130,6 +130,18 @@ def rotate_rect(x, y, w, h, pos, cw, cd):
     if pos == "左 (Left)": return cd - y - h, x, h, w
     if pos == "右 (Right)": return y, cw - x - w, h, w
 
+def rotate_point(x, y, pos, cw, cd):
+    if pos == "上 (Top)": return x, y
+    if pos == "下 (Bottom)": return x, cd - y
+    if pos == "左 (Left)": return cd - y, x
+    if pos == "右 (Right)": return y, cw - x
+
+def rotate_vector(vx, vy, pos):
+    if pos == "上 (Top)": return vx, vy
+    if pos == "下 (Bottom)": return vx, -vy
+    if pos == "左 (Left)": return -vy, vx
+    if pos == "右 (Right)": return vy, -vx
+
 # --- 実行ボタン ---
 if st.sidebar.button("割付図を生成する", type="primary"):
     with st.spinner('最適な割付を計算中...'):
@@ -156,11 +168,25 @@ if st.sidebar.button("割付図を生成する", type="primary"):
             ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor='#9999ff', edgecolor='black'))
             ax.text(rx+rw/2, ry+rh/2, 'RA Main Flow', ha='center', va='center', fontsize=12, fontweight='bold')
             
-            # 2. サブ流路の描画
+            # 2. サブ流路と空気の流れ（矢印）の描画
             for x, y, w, h, ftype in d_data['sub_flows']:
                 rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
                 color = '#ffcccc' if ftype == 'SA' else '#ccccff'
                 ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor=color, edgecolor='none'))
+                
+                # 矢印の描画
+                arrow_color = '#ff3333' if ftype == 'SA' else '#3333ff'
+                vx, vy = rotate_vector(0, -300, duct_pos) # 長さ300mmの矢印ベクトル
+                
+                num_arrows = max(1, int(h // 800))
+                for i in range(1, num_arrows + 1):
+                    ax_y = y + i * (h / (num_arrows + 1))
+                    start_y = ax_y + 150 # 矢印の始点
+                    ax_x = x + w / 2
+                    
+                    rx_start, ry_start = rotate_point(ax_x, start_y, duct_pos, calc_w, calc_d)
+                    ax.annotate('', xy=(rx_start + vx, ry_start + vy), xytext=(rx_start, ry_start),
+                                arrowprops=dict(arrowstyle='->', color=arrow_color, lw=2, alpha=0.7))
                 
             # 3. 仕切材（ブロック）の描画
             for x, y, w, h in d_data['blocks']:
@@ -172,11 +198,26 @@ if st.sidebar.button("割付図を生成する", type="primary"):
                 rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
                 ax.add_patch(patches.Rectangle((rx, ry), rw, rh, facecolor='#e0e0e0', edgecolor='gray', hatch='//'))
                 
-            # 5. パネルの描画（透明な枠線のみにして下の流路を見せる！）
+            # 5. パネルの描画（透明な枠線と空気孔！）
             for x, y, w, h, label in d_data['panels']:
                 rx, ry, rw, rh = rotate_rect(x, y, w, h, duct_pos, calc_w, calc_d)
+                # パネルの枠線
                 ax.add_patch(patches.Rectangle((rx, ry), rw, rh, fill=False, edgecolor='green', linewidth=2))
-                ax.text(rx+rw/2, ry+rh/2, str(label), ha='center', va='center', fontsize=10, color='darkgreen', fontweight='bold')
+                
+                # 空気孔（ドット）の描画
+                num_holes_x = 4
+                num_holes_y = max(2, int(h // 150))
+                
+                for i in range(1, num_holes_x):
+                    for j in range(1, num_holes_y):
+                        hx = x + i * (w / num_holes_x)
+                        hy = y + j * (h / num_holes_y)
+                        hrx, hry = rotate_point(hx, hy, duct_pos, calc_w, calc_d)
+                        ax.plot(hrx, hry, marker='o', color='darkgreen', markersize=2, alpha=0.5)
+                
+                # パネルサイズのテキスト（背景を白にして見やすく）
+                ax.text(rx+rw/2, ry+rh/2, str(label), ha='center', va='center', fontsize=10, color='darkgreen', fontweight='bold', 
+                        bbox=dict(facecolor='white', edgecolor='green', alpha=0.8, boxstyle='round,pad=0.2'))
 
             ax.set_xlim(-200, room_w + 200)
             ax.set_ylim(-200, room_d + 200)
@@ -205,9 +246,9 @@ if st.sidebar.button("割付図を生成する", type="primary"):
                 
                 st.info("""
                 **【図面の見方】**
-                - 🟩 **緑の枠線**: 床パネル（下が見えるように透明にしています）
-                - 🟥 **赤色**: SA（給気）流路
-                - 🟦 **青色**: RA（還流）流路
+                - 🟩 **緑の枠線とドット**: 床パネルと空気孔（下が見えるように透明にしています）
+                - 🟥 **赤色**: SA（給気）流路と空気の流れ（矢印）
+                - 🟦 **青色**: RA（還流）流路と空気の流れ（矢印）
                 - ⬛ **黒色**: 流路仕切材（ここで空気が行き止まりになります）
                 - ⬜ **斜線**: ボーダー材（余白）
                 """)
