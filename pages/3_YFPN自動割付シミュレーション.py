@@ -4,8 +4,8 @@ import matplotlib.patches as patches
 
 # --- ページ設定 ---
 st.set_page_config(page_title="YFPN 自動割付シミュレーション", layout="wide")
-st.title("📐 ユカリラ YFPN 自動割付シミュレーション 【最新版テスト】")
-st.error("※この赤いメッセージが見えて、かつ図面が透明になっていれば大成功です！")
+st.title("📐 ユカリラ YFPN 自動割付シミュレーション")
+st.markdown("部屋の寸法とダクトボックス（SA）の位置を入力するだけで、マニュアルのルールに従った最適なパネル割付図を自動生成します。")
 
 # --- サイドバー (入力UI) ---
 st.sidebar.header("【部屋の寸法設定】")
