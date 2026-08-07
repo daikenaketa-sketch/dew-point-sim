@@ -13,8 +13,8 @@ st.set_page_config(page_title="リアルタイム温湿度モニター", layout=
 # 内部処理（ファイル保存・API取得）
 # ==========================================
 SETTINGS_FILE = "monitor_settings.json"
-# 🌟 修正点1: 保存ファイル名を変更して、GitHub上の壊れたファイルを無視する
-BG_IMAGE_FILE = "uploaded_bg.png" 
+# 🌟 修正点1: ファイル名を新しくして、過去の壊れたファイルを完全に無視する
+BG_IMAGE_FILE = "monitor_bg.png" 
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -28,7 +28,6 @@ def save_settings(settings):
 
 settings = load_settings()
 
-# データを5分間記憶する（スライダーのラグ防止）
 @st.cache_data(ttl=300)
 def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
     url = "https://api.webstorage.jp/v1/devices/current"
@@ -55,7 +54,6 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                 temp = next((ch["value"] for ch in channels if ch["num"] == 1), "--")
                 rh = next((ch["value"] for ch in channels if ch["num"] == 2), "--")
                 
-                # 🌟 修正点2: 時間データを確実に「数字(int)」に変換してから計算する
                 unixtime = device.get("unixtime")
                 if unixtime:
                     try:
@@ -72,13 +70,15 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
         return {"error": str(e)}
 
 # ==========================================
-# 画像サイズの取得とBase64化（エラー回避機能付き）
+# 画像サイズの取得とBase64化
 # ==========================================
 bg_b64 = None
 img_w, img_h = 1200, 800
 
 if os.path.exists(BG_IMAGE_FILE):
     try:
+        img = Image.open(BG_IMAGE_FILE)
+        img.verify() # 破損チェック
         img = Image.open(BG_IMAGE_FILE)
         img.load() 
         img_w, img_h = img.size
@@ -89,7 +89,7 @@ if os.path.exists(BG_IMAGE_FILE):
             os.remove(BG_IMAGE_FILE)
         except:
             pass
-        st.warning(f"⚠️ 図面データがリセットされました（詳細: {e}）。もう一度アップロードしてください。")
+        st.warning("⚠️ 図面データがリセットされました。もう一度アップロードしてください。")
         bg_b64 = None
         img_w, img_h = 1200, 800
 
@@ -98,7 +98,6 @@ if os.path.exists(BG_IMAGE_FILE):
 # ==========================================
 st.sidebar.header("⚙️ 管理者メニュー")
 
-# 1. 画像・PDFアップロード
 st.sidebar.subheader("1. 図面のアップロード")
 uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
 
@@ -109,7 +108,6 @@ if uploaded_file is not None:
             page = doc.load_page(0)
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            # 🌟 修正点3: 保存形式をPNGに固定して破損を防ぐ
             image.save(BG_IMAGE_FILE, format="PNG")
             st.sidebar.success("PDFを図面として読み込みました！")
             st.rerun()
@@ -126,7 +124,6 @@ if uploaded_file is not None:
 
 st.sidebar.divider()
 
-# 2. 機器（おんどとり）の登録・削除
 st.sidebar.subheader("2. 機器の登録・管理")
 with st.sidebar.expander("➕ 新しい機器を登録 / 編集", expanded=False):
     new_serial = st.text_input("シリアル番号 (例: 5214A123)")
@@ -154,7 +151,6 @@ if settings:
 
 st.sidebar.divider()
 
-# 3. 座標調整スライダー
 st.sidebar.subheader("3. 測定ポイントの位置調整")
 selected_serial = None
 if settings:
@@ -180,7 +176,6 @@ else:
 # ==========================================
 st.title("📡 リアルタイム温湿度モニター")
 
-# APIキーの取得とデータフェッチ
 current_data = None
 try:
     api_key = st.secrets["ondotori"]["api_key"]
@@ -197,12 +192,9 @@ try:
 except KeyError:
     st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
 
-# HTMLとCSSを使って、画像の上にダッシュボード風のカードを重ねて描画する
 if bg_b64:
-    html_content = f"""
-    <div style="position: relative; width: 100%; max-width: {img_w}px; margin: 0 auto; border: 1px solid #ccc;">
-        <img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; display: block;" />
-    """
+    # 🌟 修正点2: HTMLコード内の改行を完全に排除し、Streamlitの誤作動を防ぐ
+    html_content = f'<div style="position: relative; width: 100%; max-width: {img_w}px; margin: 0 auto; border: 1px solid #ccc;"><img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; display: block;" />'
     
     if current_data and settings:
         for serial, info in settings.items():
@@ -218,36 +210,8 @@ if bg_b64:
             border_color = "#ff4b4b" if serial == selected_serial else "#ddd"
             box_shadow = "0 8px 16px rgba(255, 75, 75, 0.4)" if serial == selected_serial else "0 4px 8px rgba(0,0,0,0.15)"
             
-            card_html = f"""
-            <div style="
-                position: absolute; 
-                left: {left_pct}%; 
-                top: {top_pct}%; 
-                transform: translate(-50%, -50%);
-                background-color: rgba(255, 255, 255, 0.95);
-                border: 3px solid {border_color};
-                border-radius: 10px;
-                padding: 10px 15px;
-                box-shadow: {box_shadow};
-                text-align: center;
-                min-width: 140px;
-                z-index: 10;
-                white-space: nowrap;
-            ">
-                <div style="font-size: 14px; font-weight: bold; color: #333; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 8px;">
-                    {info['name']}
-                </div>
-                <div style="font-size: 32px; font-weight: bold; color: #000; line-height: 1.1;">
-                    {temp}<span style="font-size: 16px; font-weight: normal; color: #666;">℃</span>
-                </div>
-                <div style="font-size: 22px; font-weight: bold; color: #000; line-height: 1.1; margin-top: 4px;">
-                    {rh}<span style="font-size: 14px; font-weight: normal; color: #666;">%</span>
-                </div>
-                <div style="font-size: 11px; color: #888; margin-top: 8px;">
-                    最終更新: {last_update}
-                </div>
-            </div>
-            """
+            # 改行をなくして1行にまとめたカードデザイン
+            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 3px solid {border_color}; border-radius: 10px; padding: 10px 15px; box-shadow: {box_shadow}; text-align: center; min-width: 140px; z-index: 10; white-space: nowrap;"><div style="font-size: 14px; font-weight: bold; color: #333; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 8px;">{info["name"]}</div><div style="font-size: 32px; font-weight: bold; color: #000; line-height: 1.1;">{temp}<span style="font-size: 16px; font-weight: normal; color: #666;">℃</span></div><div style="font-size: 22px; font-weight: bold; color: #000; line-height: 1.1; margin-top: 4px;">{rh}<span style="font-size: 14px; font-weight: normal; color: #666;">%</span></div><div style="font-size: 11px; color: #888; margin-top: 8px;">最終更新: {last_update}</div></div>'
             html_content += card_html
 
     html_content += "</div>"
@@ -255,5 +219,4 @@ if bg_b64:
 else:
     st.info("※左のメニューから図面(画像またはPDF)をアップロードしてください")
 
-# 5分(300秒)ごとにページを自動リロード
 st.markdown('<meta http-equiv="refresh" content="300">', unsafe_allow_html=True)
