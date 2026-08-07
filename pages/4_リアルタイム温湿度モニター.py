@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import requests
+import fitz  # PDFを読み込むためのツール(PyMuPDF)
 
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
@@ -37,7 +38,6 @@ def fetch_ondotori_data():
         st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
         return None
 
-    # 修正箇所：正しいAPIのURLとヘッダー
     url = "https://api.webstorage.jp/v1/devices/current"
     headers = {
         "X-HTTP-Method-Override": "GET",
@@ -73,13 +73,28 @@ def fetch_ondotori_data():
 # ==========================================
 st.sidebar.header("⚙️ 管理者メニュー")
 
-# 1. 画像アップロード
+# 1. 画像・PDFアップロード
 st.sidebar.subheader("1. 図面のアップロード")
-uploaded_file = st.sidebar.file_uploader("新しい図面画像を選択", type=["png", "jpg", "jpeg"])
+uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
+
 if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    image.save(BG_IMAGE_FILE)
-    st.sidebar.success("図面を更新しました！")
+    # PDFがアップロードされた場合の処理
+    if uploaded_file.name.lower().endswith(".pdf"):
+        try:
+            # PDFを読み込み、1ページ目を高画質で画像化する
+            doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+            page = doc.load_page(0) # 1ページ目を取得
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 拡大して高画質化
+            image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            image.save(BG_IMAGE_FILE)
+            st.sidebar.success("PDFの1ページ目を図面として読み込みました！")
+        except Exception as e:
+            st.sidebar.error(f"PDFの読み込みに失敗しました: {e}")
+    # 画像がアップロードされた場合の処理
+    else:
+        image = Image.open(uploaded_file)
+        image.save(BG_IMAGE_FILE)
+        st.sidebar.success("図面を更新しました！")
 
 st.sidebar.divider()
 
@@ -145,7 +160,7 @@ if os.path.exists(BG_IMAGE_FILE):
 else:
     img = Image.new("RGBA", (1200, 800), (240, 240, 240, 255))
     draw = ImageDraw.Draw(img)
-    draw.text((50, 50), "※左のメニューから図面画像をアップロードしてください", fill="black")
+    draw.text((50, 50), "※左のメニューから図面(画像またはPDF)をアップロードしてください", fill="black")
 
 draw = ImageDraw.Draw(img)
 try:
