@@ -13,7 +13,6 @@ st.set_page_config(page_title="リアルタイム温湿度モニター", layout=
 # 内部処理（ファイル保存・API取得）
 # ==========================================
 SETTINGS_FILE = "monitor_settings.json"
-# 🌟 修正点1: ファイル名を新しくして、過去の壊れたファイルを完全に無視する
 BG_IMAGE_FILE = "monitor_bg.png" 
 
 def load_settings():
@@ -70,7 +69,34 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
         return {"error": str(e)}
 
 # ==========================================
-# 画像サイズの取得とBase64化
+# UI: サイドバー（管理者メニュー）
+# ==========================================
+st.sidebar.header("⚙️ 管理者メニュー")
+
+st.sidebar.subheader("1. 図面のアップロード")
+uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
+
+# 🌟 修正点1: 新しいファイルがアップロードされた時「1回だけ」保存するように記憶させる
+if uploaded_file is not None:
+    if "processed_file_id" not in st.session_state or st.session_state.processed_file_id != uploaded_file.file_id:
+        try:
+            if uploaded_file.name.lower().endswith(".pdf"):
+                # getvalue() を使うことでデータが空になるのを防ぐ
+                doc = fitz.open(stream=uploaded_file.getvalue(), filetype="pdf")
+                page = doc.load_page(0)
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            else:
+                image = Image.open(uploaded_file)
+            
+            image.save(BG_IMAGE_FILE, format="PNG")
+            st.session_state.processed_file_id = uploaded_file.file_id
+            st.sidebar.success("図面を読み込みました！")
+        except Exception as e:
+            st.sidebar.error(f"図面の読み込みに失敗しました: {e}")
+
+# ==========================================
+# 🌟 修正点2: 画像の読み込み処理をアップロードの「後」に移動し、エラーを防ぐ
 # ==========================================
 bg_b64 = None
 img_w, img_h = 1200, 800
@@ -92,35 +118,6 @@ if os.path.exists(BG_IMAGE_FILE):
         st.warning("⚠️ 図面データがリセットされました。もう一度アップロードしてください。")
         bg_b64 = None
         img_w, img_h = 1200, 800
-
-# ==========================================
-# UI: サイドバー（管理者メニュー）
-# ==========================================
-st.sidebar.header("⚙️ 管理者メニュー")
-
-st.sidebar.subheader("1. 図面のアップロード")
-uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
-
-if uploaded_file is not None:
-    if uploaded_file.name.lower().endswith(".pdf"):
-        try:
-            doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            page = doc.load_page(0)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            image.save(BG_IMAGE_FILE, format="PNG")
-            st.sidebar.success("PDFを図面として読み込みました！")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"PDFの読み込みに失敗しました: {e}")
-    else:
-        try:
-            image = Image.open(uploaded_file)
-            image.save(BG_IMAGE_FILE, format="PNG")
-            st.sidebar.success("図面を更新しました！")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"画像の読み込みに失敗しました: {e}")
 
 st.sidebar.divider()
 
@@ -193,7 +190,6 @@ except KeyError:
     st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
 
 if bg_b64:
-    # 🌟 修正点2: HTMLコード内の改行を完全に排除し、Streamlitの誤作動を防ぐ
     html_content = f'<div style="position: relative; width: 100%; max-width: {img_w}px; margin: 0 auto; border: 1px solid #ccc;"><img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; display: block;" />'
     
     if current_data and settings:
@@ -210,7 +206,6 @@ if bg_b64:
             border_color = "#ff4b4b" if serial == selected_serial else "#ddd"
             box_shadow = "0 8px 16px rgba(255, 75, 75, 0.4)" if serial == selected_serial else "0 4px 8px rgba(0,0,0,0.15)"
             
-            # 改行をなくして1行にまとめたカードデザイン
             card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 3px solid {border_color}; border-radius: 10px; padding: 10px 15px; box-shadow: {box_shadow}; text-align: center; min-width: 140px; z-index: 10; white-space: nowrap;"><div style="font-size: 14px; font-weight: bold; color: #333; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 8px;">{info["name"]}</div><div style="font-size: 32px; font-weight: bold; color: #000; line-height: 1.1;">{temp}<span style="font-size: 16px; font-weight: normal; color: #666;">℃</span></div><div style="font-size: 22px; font-weight: bold; color: #000; line-height: 1.1; margin-top: 4px;">{rh}<span style="font-size: 14px; font-weight: normal; color: #666;">%</span></div><div style="font-size: 11px; color: #888; margin-top: 8px;">最終更新: {last_update}</div></div>'
             html_content += card_html
 
