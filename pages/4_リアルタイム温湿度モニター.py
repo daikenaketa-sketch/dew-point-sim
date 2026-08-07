@@ -10,6 +10,12 @@ import fitz  # PDFを読み込むためのツール(PyMuPDF)
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
 # ==========================================
+# セッション状態の初期化（全画面モード用）
+# ==========================================
+if "monitor_mode" not in st.session_state:
+    st.session_state.monitor_mode = False
+
+# ==========================================
 # 複数フロア（図面）の管理
 # ==========================================
 FLOORS_FILE = "floors.json"
@@ -32,8 +38,15 @@ if os.path.exists("monitor_bg.png") and not os.path.exists("bg_メイン.png"):
     os.rename("monitor_bg.png", "bg_メイン.png")
 
 # ==========================================
-# UI: サイドバー（フロア選択）
+# UI: サイドバー（フロア選択 ＆ 全画面ボタン）
 # ==========================================
+# 🌟 新機能：モニター全画面モードへの切り替えボタン
+if st.sidebar.button("📺 モニター全画面モードを開始", type="primary", use_container_width=True):
+    st.session_state.monitor_mode = True
+    st.rerun()
+
+st.sidebar.divider()
+
 st.sidebar.header("📂 フロア（図面）の選択")
 current_floor = st.sidebar.selectbox("表示するフロアを切り替え", floors)
 
@@ -72,7 +85,6 @@ def load_settings():
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # 🌟 過去のデータを新フォーマット（ch分割対応）に自動変換
             new_data = {}
             changed = False
             for k, v in data.items():
@@ -208,7 +220,6 @@ with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expande
     new_serial = st.text_input("シリアル番号 (例: 5214A123)")
     new_name = st.text_input("画面に表示する名前 (例: 6m地点)")
     
-    # 🌟 新機能：表示モードの選択
     mode_options = {
         "両方表示 (ch1 & ch2)": "all",
         "ch1のみ表示": "ch1",
@@ -219,7 +230,7 @@ with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expande
     if st.button("登録・更新する"):
         if new_serial and new_name:
             mode = mode_options[selected_mode_label]
-            new_key = f"{new_serial}_{mode}" # シリアルとモードを組み合わせた一意のキー
+            new_key = f"{new_serial}_{mode}"
             
             if new_key not in settings:
                 settings[new_key] = {"serial": new_serial, "name": new_name, "x": img_w // 2, "y": img_h // 2, "mode": mode}
@@ -267,7 +278,28 @@ else:
 # ==========================================
 # UI: メイン画面（モニター表示）
 # ==========================================
-st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
+# 🌟 全画面モード時のCSSハック（不要なメニューをすべて隠す）
+if st.session_state.monitor_mode:
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {display: none !important;}
+        [data-testid="collapsedControl"] {display: none !important;}
+        header {visibility: hidden !important;}
+        footer {visibility: hidden !important;}
+        .block-container {padding-top: 1rem !important; padding-bottom: 0rem !important; max-width: 100% !important;}
+        </style>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([8, 2])
+    with col1:
+        st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
+    with col2:
+        st.write("") # 位置調整用の空行
+        if st.button("⚙️ 設定画面に戻る", use_container_width=True):
+            st.session_state.monitor_mode = False
+            st.rerun()
+else:
+    st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
 
 current_data = None
 try:
@@ -276,7 +308,6 @@ try:
     login_pass = st.secrets["ondotori"]["login_pass"]
     
     with st.spinner("おんどとりから最新データを取得中..."):
-        # 🌟 必要なシリアル番号だけを抽出してAPIにリクエスト
         settings_serials = list(set([info["serial"] for info in settings.values()]))
         current_data = fetch_ondotori_data(api_key, login_id, login_pass, settings_serials)
         
@@ -304,18 +335,17 @@ if bg_b64:
             ch2_unit = current_data.get(serial, {}).get("ch2_unit", "%")
             last_update = current_data.get(serial, {}).get("last_update", "--")
             
-            border_color = "#ff4b4b" if key == selected_key else "#aaa"
-            box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if key == selected_key else "0 2px 6px rgba(0,0,0,0.2)"
+            border_color = "#ff4b4b" if key == selected_key and not st.session_state.monitor_mode else "#aaa"
+            box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if key == selected_key and not st.session_state.monitor_mode else "0 2px 6px rgba(0,0,0,0.2)"
             
             def get_color(unit):
-                if "C" in unit or "℃" in unit: return "#d32f2f" # 赤色
-                if "%" in unit or "rh" in unit.lower(): return "#1976d2" # 青色
-                return "#333333" # その他は黒
+                if "C" in unit or "℃" in unit: return "#d32f2f"
+                if "%" in unit or "rh" in unit.lower(): return "#1976d2"
+                return "#333333"
                 
             ch1_color = get_color(ch1_unit)
             ch2_color = get_color(ch2_unit)
             
-            # 🌟 モードに応じて表示するHTMLを切り替え
             ch1_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch1_color}; line-height: 1.1;">{ch1_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
             ch2_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1; margin-top: 2px;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
             ch2_only_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
