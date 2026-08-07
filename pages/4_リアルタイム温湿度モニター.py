@@ -19,7 +19,7 @@ def load_settings():
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {} # 初期状態は空っぽ
+    return {}
 
 # 設定を保存する
 def save_settings(settings):
@@ -28,16 +28,9 @@ def save_settings(settings):
 
 settings = load_settings()
 
-# おんどとりAPIからデータを取得する関数
-def fetch_ondotori_data():
-    try:
-        api_key = st.secrets["ondotori"]["api_key"]
-        login_id = st.secrets["ondotori"]["login_id"]
-        login_pass = st.secrets["ondotori"]["login_pass"]
-    except KeyError:
-        st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
-        return None
-
+# 🌟 ここがポイント！取得したデータを5分間(300秒)記憶する
+@st.cache_data(ttl=300)
+def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
     url = "https://api.webstorage.jp/v1/devices/current"
     headers = {
         "X-HTTP-Method-Override": "GET",
@@ -57,16 +50,14 @@ def fetch_ondotori_data():
         display_data = {}
         for device in data.get("devices", []):
             serial = device.get("serial")
-            # 登録されているシリアル番号のデータだけを抽出
-            if serial in settings:
+            if serial in settings_keys:
                 channels = device.get("channel", [])
                 temp = next((ch["value"] for ch in channels if ch["num"] == 1), "--")
                 rh = next((ch["value"] for ch in channels if ch["num"] == 2), "--")
                 display_data[serial] = {"temp": temp, "rh": rh}
         return display_data
     except Exception as e:
-        st.error(f"データ取得エラー: {e}")
-        return None
+        return {"error": str(e)}
 
 # ==========================================
 # UI: サイドバー（管理者メニュー）
@@ -78,19 +69,16 @@ st.sidebar.subheader("1. 図面のアップロード")
 uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
 
 if uploaded_file is not None:
-    # PDFがアップロードされた場合の処理
     if uploaded_file.name.lower().endswith(".pdf"):
         try:
-            # PDFを読み込み、1ページ目を高画質で画像化する
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            page = doc.load_page(0) # 1ページ目を取得
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 拡大して高画質化
+            page = doc.load_page(0)
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             image.save(BG_IMAGE_FILE)
             st.sidebar.success("PDFの1ページ目を図面として読み込みました！")
         except Exception as e:
             st.sidebar.error(f"PDFの読み込みに失敗しました: {e}")
-    # 画像がアップロードされた場合の処理
     else:
         image = Image.open(uploaded_file)
         image.save(BG_IMAGE_FILE)
@@ -106,10 +94,8 @@ with st.sidebar.expander("➕ 新しい機器を登録 / 編集", expanded=False
     if st.button("登録・更新する"):
         if new_serial and new_name:
             if new_serial not in settings:
-                # 新規登録の場合は初期座標を(100, 100)にする
                 settings[new_serial] = {"name": new_name, "x": 100, "y": 100}
             else:
-                # 既存の場合は名前だけ更新
                 settings[new_serial]["name"] = new_name
             save_settings(settings)
             st.success(f"{new_name} を登録しました！")
@@ -151,8 +137,23 @@ st.title("📡 リアルタイム温湿度モニター")
 now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 st.info(f"🔄 最終データ更新: **{now_str}** （5分ごとに自動更新されます）")
 
-with st.spinner("おんどとりから最新データを取得中..."):
-    current_data = fetch_ondotori_data()
+# APIキーの取得とデータフェッチ
+current_data = None
+try:
+    api_key = st.secrets["ondotori"]["api_key"]
+    login_id = st.secrets["ondotori"]["login_id"]
+    login_pass = st.secrets["ondotori"]["login_pass"]
+    
+    with st.spinner("おんどとりから最新データを取得中..."):
+        # settingsのキーをタプルにして渡す（キャッシュ機能の仕様のため）
+        settings_keys = tuple(settings.keys())
+        current_data = fetch_ondotori_data(api_key, login_id, login_pass, settings_keys)
+        
+        if current_data and "error" in current_data:
+            st.error(f"データ取得エラー: {current_data['error']}")
+            current_data = None
+except KeyError:
+    st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
 
 # 画像の描画処理
 if os.path.exists(BG_IMAGE_FILE):
