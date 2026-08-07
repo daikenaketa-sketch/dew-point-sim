@@ -37,9 +37,17 @@ def fetch_ondotori_data():
         st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
         return None
 
-    url = "https://api.ondotori.webstorage.jp/data/current"
-    headers = {"X-TND-API-KEY": api_key}
-    payload = {"api-key": api_key, "login-id": login_id, "login-pass": login_pass}
+    # 修正箇所：正しいAPIのURLとヘッダー
+    url = "https://api.webstorage.jp/v1/devices/current"
+    headers = {
+        "X-HTTP-Method-Override": "GET",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "api-key": api_key,
+        "login-id": login_id,
+        "login-pass": login_pass
+    }
 
     try:
         response = requests.post(url, json=payload, headers=headers)
