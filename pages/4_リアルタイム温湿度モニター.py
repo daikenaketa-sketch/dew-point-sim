@@ -13,7 +13,8 @@ st.set_page_config(page_title="リアルタイム温湿度モニター", layout=
 # 内部処理（ファイル保存・API取得）
 # ==========================================
 SETTINGS_FILE = "monitor_settings.json"
-BG_IMAGE_FILE = "current_bg.png"
+# 🌟 修正点1: 保存ファイル名を変更して、GitHub上の壊れたファイルを無視する
+BG_IMAGE_FILE = "uploaded_bg.png" 
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -54,11 +55,14 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                 temp = next((ch["value"] for ch in channels if ch["num"] == 1), "--")
                 rh = next((ch["value"] for ch in channels if ch["num"] == 2), "--")
                 
-                # 最終更新日時を取得して日本時間に変換
+                # 🌟 修正点2: 時間データを確実に「数字(int)」に変換してから計算する
                 unixtime = device.get("unixtime")
                 if unixtime:
-                    dt = datetime.datetime.utcfromtimestamp(unixtime) + datetime.timedelta(hours=9)
-                    last_update = dt.strftime('%m/%d %H:%M')
+                    try:
+                        dt = datetime.datetime.utcfromtimestamp(int(unixtime)) + datetime.timedelta(hours=9)
+                        last_update = dt.strftime('%m/%d %H:%M')
+                    except (ValueError, TypeError):
+                        last_update = "--"
                 else:
                     last_update = "--"
                     
@@ -68,23 +72,24 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
         return {"error": str(e)}
 
 # ==========================================
-# 🌟 修正箇所：画像サイズの取得とBase64化（エラー回避機能付き）
+# 画像サイズの取得とBase64化（エラー回避機能付き）
 # ==========================================
 bg_b64 = None
 img_w, img_h = 1200, 800
 
 if os.path.exists(BG_IMAGE_FILE):
     try:
-        # 画像を開いて、破損していないかチェックする
         img = Image.open(BG_IMAGE_FILE)
         img.load() 
         img_w, img_h = img.size
         with open(BG_IMAGE_FILE, "rb") as f:
             bg_b64 = base64.b64encode(f.read()).decode()
     except Exception as e:
-        # ⚠️ 画像が破損していた場合は、ファイルを削除して初期状態に戻す
-        os.remove(BG_IMAGE_FILE)
-        st.warning("⚠️ 保存されていた図面データが破損していたためリセットしました。もう一度図面をアップロードしてください。")
+        try:
+            os.remove(BG_IMAGE_FILE)
+        except:
+            pass
+        st.warning(f"⚠️ 図面データがリセットされました（詳細: {e}）。もう一度アップロードしてください。")
         bg_b64 = None
         img_w, img_h = 1200, 800
 
@@ -104,7 +109,8 @@ if uploaded_file is not None:
             page = doc.load_page(0)
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            image.save(BG_IMAGE_FILE)
+            # 🌟 修正点3: 保存形式をPNGに固定して破損を防ぐ
+            image.save(BG_IMAGE_FILE, format="PNG")
             st.sidebar.success("PDFを図面として読み込みました！")
             st.rerun()
         except Exception as e:
@@ -112,7 +118,7 @@ if uploaded_file is not None:
     else:
         try:
             image = Image.open(uploaded_file)
-            image.save(BG_IMAGE_FILE)
+            image.save(BG_IMAGE_FILE, format="PNG")
             st.sidebar.success("図面を更新しました！")
             st.rerun()
         except Exception as e:
@@ -154,7 +160,6 @@ selected_serial = None
 if settings:
     selected_serial = st.sidebar.selectbox("動かしたいポイントを選択", options=list(settings.keys()), format_func=lambda x: settings[x]["name"])
     
-    # スライダーの最大値を画像の実際のサイズに合わせる
     max_x = max(img_w, 1)
     max_y = max(img_h, 1)
     current_x = min(settings[selected_serial]["x"], max_x)
@@ -203,7 +208,6 @@ if bg_b64:
         for serial, info in settings.items():
             x, y = info["x"], info["y"]
             
-            # 座標をパーセンテージに変換（画面サイズが変わってもズレないようにする）
             left_pct = (x / img_w) * 100
             top_pct = (y / img_h) * 100
             
@@ -211,11 +215,9 @@ if bg_b64:
             rh = current_data.get(serial, {}).get("rh", "--")
             last_update = current_data.get(serial, {}).get("last_update", "--")
             
-            # 選択中のポイントは枠線を赤くする
             border_color = "#ff4b4b" if serial == selected_serial else "#ddd"
             box_shadow = "0 8px 16px rgba(255, 75, 75, 0.4)" if serial == selected_serial else "0 4px 8px rgba(0,0,0,0.15)"
             
-            # ダッシュボード風のカードデザイン
             card_html = f"""
             <div style="
                 position: absolute; 
