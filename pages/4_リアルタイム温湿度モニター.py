@@ -54,7 +54,7 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                 temp = next((ch["value"] for ch in channels if ch["num"] == 1), "--")
                 rh = next((ch["value"] for ch in channels if ch["num"] == 2), "--")
                 
-                # 🌟 最終更新日時を取得して日本時間に変換
+                # 最終更新日時を取得して日本時間に変換
                 unixtime = device.get("unixtime")
                 if unixtime:
                     dt = datetime.datetime.utcfromtimestamp(unixtime) + datetime.timedelta(hours=9)
@@ -68,16 +68,25 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
         return {"error": str(e)}
 
 # ==========================================
-# 画像サイズの取得とBase64化（HTML描画用）
+# 🌟 修正箇所：画像サイズの取得とBase64化（エラー回避機能付き）
 # ==========================================
+bg_b64 = None
+img_w, img_h = 1200, 800
+
 if os.path.exists(BG_IMAGE_FILE):
-    img = Image.open(BG_IMAGE_FILE)
-    img_w, img_h = img.size
-    with open(BG_IMAGE_FILE, "rb") as f:
-        bg_b64 = base64.b64encode(f.read()).decode()
-else:
-    img_w, img_h = 1200, 800
-    bg_b64 = None
+    try:
+        # 画像を開いて、破損していないかチェックする
+        img = Image.open(BG_IMAGE_FILE)
+        img.load() 
+        img_w, img_h = img.size
+        with open(BG_IMAGE_FILE, "rb") as f:
+            bg_b64 = base64.b64encode(f.read()).decode()
+    except Exception as e:
+        # ⚠️ 画像が破損していた場合は、ファイルを削除して初期状態に戻す
+        os.remove(BG_IMAGE_FILE)
+        st.warning("⚠️ 保存されていた図面データが破損していたためリセットしました。もう一度図面をアップロードしてください。")
+        bg_b64 = None
+        img_w, img_h = 1200, 800
 
 # ==========================================
 # UI: サイドバー（管理者メニュー）
@@ -101,10 +110,13 @@ if uploaded_file is not None:
         except Exception as e:
             st.sidebar.error(f"PDFの読み込みに失敗しました: {e}")
     else:
-        image = Image.open(uploaded_file)
-        image.save(BG_IMAGE_FILE)
-        st.sidebar.success("図面を更新しました！")
-        st.rerun()
+        try:
+            image = Image.open(uploaded_file)
+            image.save(BG_IMAGE_FILE)
+            st.sidebar.success("図面を更新しました！")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"画像の読み込みに失敗しました: {e}")
 
 st.sidebar.divider()
 
@@ -180,7 +192,7 @@ try:
 except KeyError:
     st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
 
-# 🌟 HTMLとCSSを使って、画像の上にダッシュボード風のカードを重ねて描画する
+# HTMLとCSSを使って、画像の上にダッシュボード風のカードを重ねて描画する
 if bg_b64:
     html_content = f"""
     <div style="position: relative; width: 100%; max-width: {img_w}px; margin: 0 auto; border: 1px solid #ccc;">
