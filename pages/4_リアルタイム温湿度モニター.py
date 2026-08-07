@@ -10,10 +10,64 @@ import fitz  # PDFを読み込むためのツール(PyMuPDF)
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
 # ==========================================
-# 内部処理（ファイル保存・API取得）
+# 🌟 新機能：複数フロア（図面）の管理
 # ==========================================
-SETTINGS_FILE = "monitor_settings.json"
-BG_IMAGE_FILE = "monitor_bg.png" 
+FLOORS_FILE = "floors.json"
+
+def load_floors():
+    if os.path.exists(FLOORS_FILE):
+        with open(FLOORS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return ["メイン"]
+
+def save_floors(floors):
+    with open(FLOORS_FILE, "w", encoding="utf-8") as f:
+        json.dump(floors, f, ensure_ascii=False, indent=4)
+
+floors = load_floors()
+
+# 💡 今まで作ったデータを「メイン」として自動引き継ぎする処理
+if os.path.exists("monitor_settings.json") and not os.path.exists("settings_メイン.json"):
+    os.rename("monitor_settings.json", "settings_メイン.json")
+if os.path.exists("monitor_bg.png") and not os.path.exists("bg_メイン.png"):
+    os.rename("monitor_bg.png", "bg_メイン.png")
+
+# ==========================================
+# UI: サイドバー（フロア選択）
+# ==========================================
+st.sidebar.header("📂 フロア（図面）の選択")
+current_floor = st.sidebar.selectbox("表示するフロアを切り替え", floors)
+
+with st.sidebar.expander("➕ 新しいフロアを追加"):
+    new_floor_name = st.text_input("新しいフロア名 (例: 2階, 別館)")
+    if st.button("追加する"):
+        if new_floor_name and new_floor_name not in floors:
+            floors.append(new_floor_name)
+            save_floors(floors)
+            st.success(f"{new_floor_name} を追加しました！")
+            st.rerun()
+        elif new_floor_name in floors:
+            st.warning("その名前は既に存在します。")
+
+with st.sidebar.expander("🗑️ 現在のフロアを削除"):
+    if len(floors) > 1:
+        if st.button(f"「{current_floor}」を削除"):
+            floors.remove(current_floor)
+            save_floors(floors)
+            if os.path.exists(f"settings_{current_floor}.json"): os.remove(f"settings_{current_floor}.json")
+            if os.path.exists(f"bg_{current_floor}.png"): os.remove(f"bg_{current_floor}.png")
+            st.success("削除しました！")
+            st.rerun()
+    else:
+        st.info("最後の1つは削除できません。")
+
+st.sidebar.divider()
+
+# ==========================================
+# 内部処理（選択中のフロアに応じたファイル設定）
+# ==========================================
+SETTINGS_FILE = f"settings_{current_floor}.json"
+BG_IMAGE_FILE = f"bg_{current_floor}.png"
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -51,9 +105,22 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
             if serial in settings_keys:
                 channels = device.get("channel", [])
                 
-                # 🌟 修正点1: チャンネル番号が文字(str)で来ても数字(int)で来ても確実に読み取る
-                temp = next((ch.get("value", "--") for ch in channels if str(ch.get("num")) == "1"), "--")
-                rh = next((ch.get("value", "--") for ch in channels if str(ch.get("num")) == "2"), "--")
+                ch1_val, ch1_unit = "--", "℃"
+                ch2_val, ch2_unit = "--", "%"
+                
+                for ch in channels:
+                    num = str(ch.get("num"))
+                    val = ch.get("value", "--")
+                    unit = ch.get("unit", "")
+                    
+                    if unit == "C": unit = "℃"
+                    
+                    if num == "1":
+                        ch1_val = val
+                        if unit: ch1_unit = unit
+                    elif num == "2":
+                        ch2_val = val
+                        if unit: ch2_unit = unit
                 
                 unixtime = device.get("unixtime")
                 if unixtime:
@@ -65,7 +132,11 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                 else:
                     last_update = "--"
                     
-                display_data[serial] = {"temp": temp, "rh": rh, "last_update": last_update}
+                display_data[serial] = {
+                    "ch1_val": ch1_val, "ch1_unit": ch1_unit,
+                    "ch2_val": ch2_val, "ch2_unit": ch2_unit,
+                    "last_update": last_update
+                }
         return display_data
     except Exception as e:
         return {"error": str(e)}
@@ -76,10 +147,11 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
 st.sidebar.header("⚙️ 管理者メニュー")
 
 st.sidebar.subheader("1. 図面のアップロード")
-uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
+uploaded_file = st.sidebar.file_uploader(f"「{current_floor}」の図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
 
 if uploaded_file is not None:
-    if "processed_file_id" not in st.session_state or st.session_state.processed_file_id != uploaded_file.file_id:
+    file_key = f"{current_floor}_{uploaded_file.file_id}"
+    if "processed_file_id" not in st.session_state or st.session_state.processed_file_id != file_key:
         try:
             if uploaded_file.name.lower().endswith(".pdf"):
                 doc = fitz.open(stream=uploaded_file.getvalue(), filetype="pdf")
@@ -90,8 +162,8 @@ if uploaded_file is not None:
                 image = Image.open(uploaded_file)
             
             image.save(BG_IMAGE_FILE, format="PNG")
-            st.session_state.processed_file_id = uploaded_file.file_id
-            st.sidebar.success("図面を読み込みました！")
+            st.session_state.processed_file_id = file_key
+            st.sidebar.success(f"「{current_floor}」の図面を読み込みました！")
         except Exception as e:
             st.sidebar.error(f"図面の読み込みに失敗しました: {e}")
 
@@ -112,14 +184,14 @@ if os.path.exists(BG_IMAGE_FILE):
             os.remove(BG_IMAGE_FILE)
         except:
             pass
-        st.warning("⚠️ 図面データがリセットされました。もう一度アップロードしてください。")
+        st.warning(f"⚠️ 「{current_floor}」の図面データがありません。アップロードしてください。")
         bg_b64 = None
         img_w, img_h = 1200, 800
 
 st.sidebar.divider()
 
 st.sidebar.subheader("2. 機器の登録・管理")
-with st.sidebar.expander("➕ 新しい機器を登録 / 編集", expanded=False):
+with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expanded=False):
     new_serial = st.text_input("シリアル番号 (例: 5214A123)")
     new_name = st.text_input("画面に表示する名前 (例: 体育館)")
     if st.button("登録・更新する"):
@@ -155,9 +227,8 @@ if settings:
     current_x = min(settings[selected_serial]["x"], max_x)
     current_y = min(settings[selected_serial]["y"], max_y)
 
-    # 🌟 修正点2: スライダーに key を設定し、1回で確実に動くように修正
-    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=f"x_{selected_serial}")
-    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=f"y_{selected_serial}")
+    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=f"x_{current_floor}_{selected_serial}")
+    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=f"y_{current_floor}_{selected_serial}")
 
     if new_x != settings[selected_serial]["x"] or new_y != settings[selected_serial]["y"]:
         settings[selected_serial]["x"] = new_x
@@ -169,7 +240,7 @@ else:
 # ==========================================
 # UI: メイン画面（モニター表示）
 # ==========================================
-st.title("📡 リアルタイム温湿度モニター")
+st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
 
 current_data = None
 try:
@@ -197,23 +268,32 @@ if bg_b64:
             left_pct = (x / img_w) * 100
             top_pct = (y / img_h) * 100
             
-            temp = current_data.get(serial, {}).get("temp", "--")
-            rh = current_data.get(serial, {}).get("rh", "--")
+            ch1_val = current_data.get(serial, {}).get("ch1_val", "--")
+            ch1_unit = current_data.get(serial, {}).get("ch1_unit", "℃")
+            ch2_val = current_data.get(serial, {}).get("ch2_val", "--")
+            ch2_unit = current_data.get(serial, {}).get("ch2_unit", "%")
             last_update = current_data.get(serial, {}).get("last_update", "--")
             
             border_color = "#ff4b4b" if serial == selected_serial else "#aaa"
             box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if serial == selected_serial else "0 2px 6px rgba(0,0,0,0.2)"
             
-            # 🌟 修正点3: 湿度が無い場合は湿度行を消してコンパクトにする
-            rh_html = f'<div style="font-size: 16px; font-weight: bold; color: #000; line-height: 1.0; margin-top: 4px;">{rh}<span style="font-size: 10px; font-weight: normal; color: #666;">%</span></div>' if rh != "--" else ""
+            def get_color(unit):
+                if "C" in unit or "℃" in unit: return "#d32f2f" # 赤色
+                if "%" in unit or "rh" in unit.lower(): return "#1976d2" # 青色
+                return "#333333" # その他は黒
+                
+            ch1_color = get_color(ch1_unit)
+            ch2_color = get_color(ch2_unit)
             
-            # 🌟 修正点4: 余白を削り、全体をコンパクトに再設計
-            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 2px solid {border_color}; border-radius: 6px; padding: 4px 8px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10; white-space: nowrap;"><div style="font-size: 12px; font-weight: bold; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px;">{info["name"]}</div><div style="font-size: 24px; font-weight: bold; color: #000; line-height: 1.0;">{temp}<span style="font-size: 12px; font-weight: normal; color: #666;">℃</span></div>{rh_html}<div style="font-size: 10px; color: #888; margin-top: 4px;">{last_update}</div></div>'
+            ch1_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch1_color}; line-height: 1.1;">{ch1_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
+            ch2_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1; margin-top: 2px;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+            
+            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 2px solid {border_color}; border-radius: 6px; padding: 4px 8px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10; white-space: nowrap;"><div style="font-size: 12px; font-weight: bold; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px;">{info["name"]}</div>{ch1_html}{ch2_html}<div style="font-size: 10px; color: #888; margin-top: 4px;">{last_update}</div></div>'
             html_content += card_html
 
     html_content += "</div>"
     st.markdown(html_content, unsafe_allow_html=True)
 else:
-    st.info("※左のメニューから図面(画像またはPDF)をアップロードしてください")
+    st.info(f"※左のメニューから「{current_floor}」の図面(画像またはPDF)をアップロードしてください")
 
 st.markdown('<meta http-equiv="refresh" content="300">', unsafe_allow_html=True)
