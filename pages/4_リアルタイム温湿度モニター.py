@@ -4,16 +4,20 @@ from PIL import Image
 import datetime
 import json
 import os
+import glob
 import requests
 import fitz  # PDFを読み込むためのツール(PyMuPDF)
 
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
 # ==========================================
-# セッション状態の初期化（全画面モード用）
+# 初期設定・フォルダ作成
 # ==========================================
 if "monitor_mode" not in st.session_state:
     st.session_state.monitor_mode = False
+
+GL840_DIR = "gl840_data"
+os.makedirs(GL840_DIR, exist_ok=True)
 
 # ==========================================
 # 複数フロア（図面）の管理
@@ -40,7 +44,6 @@ if os.path.exists("monitor_bg.png") and not os.path.exists("bg_メイン.png"):
 # ==========================================
 # UI: サイドバー（フロア選択 ＆ 全画面ボタン）
 # ==========================================
-# 🌟 新機能：モニター全画面モードへの切り替えボタン
 if st.sidebar.button("📺 モニター全画面モードを開始", type="primary", use_container_width=True):
     st.session_state.monitor_mode = True
     st.rerun()
@@ -76,7 +79,7 @@ with st.sidebar.expander("🗑️ 現在のフロアを削除"):
 st.sidebar.divider()
 
 # ==========================================
-# 内部処理（選択中のフロアに応じたファイル設定）
+# 内部処理（設定ファイルの読み書き）
 # ==========================================
 SETTINGS_FILE = f"settings_{current_floor}.json"
 BG_IMAGE_FILE = f"bg_{current_floor}.png"
@@ -88,9 +91,12 @@ def load_settings():
             new_data = {}
             changed = False
             for k, v in data.items():
-                if "serial" not in v:
+                if "source" not in v:
+                    v["source"] = "ondotori"
+                    changed = True
+                if "serial" not in v and v["source"] == "ondotori":
                     new_key = f"{k}_all"
-                    new_data[new_key] = {"serial": k, "name": v["name"], "x": v["x"], "y": v["y"], "mode": "all"}
+                    new_data[new_key] = {"source": "ondotori", "serial": k, "name": v["name"], "x": v["x"], "y": v["y"], "mode": "all"}
                     changed = True
                 else:
                     new_data[k] = v
@@ -106,18 +112,14 @@ def save_settings(settings):
 
 settings = load_settings()
 
+# ==========================================
+# データ取得関数
+# ==========================================
 @st.cache_data(ttl=300)
 def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
     url = "https://api.webstorage.jp/v1/devices/current"
-    headers = {
-        "X-HTTP-Method-Override": "GET",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "api-key": api_key,
-        "login-id": login_id,
-        "login-pass": login_pass
-    }
+    headers = {"X-HTTP-Method-Override": "GET", "Content-Type": "application/json"}
+    payload = {"api-key": api_key, "login-id": login_id, "login-pass": login_pass}
 
     try:
         response = requests.post(url, json=payload, headers=headers)
@@ -129,7 +131,6 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
             serial = device.get("serial")
             if serial in settings_keys:
                 channels = device.get("channel", [])
-                
                 ch1_val, ch1_unit = "--", "℃"
                 ch2_val, ch2_unit = "--", "%"
                 
@@ -137,7 +138,6 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                     num = str(ch.get("num"))
                     val = ch.get("value", "--")
                     unit = ch.get("unit", "")
-                    
                     if unit == "C": unit = "℃"
                     
                     if num == "1":
@@ -152,7 +152,7 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                     try:
                         dt = datetime.datetime.utcfromtimestamp(int(unixtime)) + datetime.timedelta(hours=9)
                         last_update = dt.strftime('%m/%d %H:%M')
-                    except (ValueError, TypeError):
+                    except:
                         last_update = "--"
                 else:
                     last_update = "--"
@@ -163,6 +163,57 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
                     "last_update": last_update
                 }
         return display_data
+    except Exception as e:
+        return {"error": str(e)}
+
+@st.cache_data(ttl=60) # GL840はローカルなので1分更新
+def fetch_gl840_data():
+    csv_files = glob.glob(os.path.join(GL840_DIR, "*.csv"))
+    if not csv_files:
+        return {"error": f"'{GL840_DIR}' フォルダにCSVファイルがありません。"}
+    
+    latest_file = max(csv_files, key=os.path.getctime)
+    
+    try:
+        with open(latest_file, "r", encoding="shift_jis", errors="replace") as f:
+            lines = f.readlines()
+            
+        header_idx = -1
+        for i, line in enumerate(lines):
+            if line.startswith("番号,日付 時間,ms,"):
+                header_idx = i
+                break
+                
+        if header_idx == -1 or len(lines) <= header_idx + 2:
+            return {"error": "CSVのフォーマットが異なります。"}
+            
+        headers = lines[header_idx].strip().split(",")
+        units = lines[header_idx + 1].strip().split(",")
+        
+        data_lines = [l.strip() for l in lines[header_idx+2:] if l.strip()]
+        if not data_lines:
+            return {"error": "データ行がありません。"}
+            
+        latest_data = data_lines[-1].split(",")
+        time_str = latest_data[1]
+        
+        try:
+            dt = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            formatted_time = dt.strftime("%m/%d %H:%M")
+        except:
+            formatted_time = time_str
+            
+        result = {}
+        for i, col_name in enumerate(headers):
+            if col_name.startswith("CH"):
+                val = latest_data[i]
+                unit = units[i].replace("ﾟC", "℃").replace("C", "℃")
+                result[col_name] = {
+                    "val": val,
+                    "unit": unit,
+                    "time": formatted_time
+                }
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -217,36 +268,47 @@ st.sidebar.divider()
 
 st.sidebar.subheader("2. 機器の登録・管理")
 with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expanded=False):
-    new_serial = st.text_input("シリアル番号 (例: 5214A123)")
-    new_name = st.text_input("画面に表示する名前 (例: 6m地点)")
+    source_options = ["おんどとり (クラウド)", "GL840 (ローカルCSV)"]
+    selected_source = st.selectbox("データソース", source_options)
     
-    mode_options = {
-        "両方表示 (ch1 & ch2)": "all",
-        "ch1のみ表示": "ch1",
-        "ch2のみ表示": "ch2"
-    }
-    selected_mode_label = st.selectbox("表示タイプ", list(mode_options.keys()))
+    if selected_source == "おんどとり (クラウド)":
+        new_serial = st.text_input("シリアル番号 (例: 5214A123)")
+        mode_options = {"両方表示 (ch1 & ch2)": "all", "ch1のみ表示": "ch1", "ch2のみ表示": "ch2"}
+        selected_mode_label = st.selectbox("表示タイプ", list(mode_options.keys()))
+    else:
+        new_ch = st.text_input("チャンネル番号 (例: CH1, CH2)")
+        st.caption(f"※CSVファイルはアプリと同じ場所の `{GL840_DIR}` フォルダに保存されるように設定してください。")
+
+    new_name = st.text_input("画面に表示する名前 (例: 6m地点)")
 
     if st.button("登録・更新する"):
-        if new_serial and new_name:
+        if selected_source == "おんどとり (クラウド)" and new_serial and new_name:
             mode = mode_options[selected_mode_label]
-            new_key = f"{new_serial}_{mode}"
-            
-            if new_key not in settings:
-                settings[new_key] = {"serial": new_serial, "name": new_name, "x": img_w // 2, "y": img_h // 2, "mode": mode}
-            else:
-                settings[new_key]["name"] = new_name
-                settings[new_key]["serial"] = new_serial
-                settings[new_key]["mode"] = mode
+            new_key = f"ondotori_{new_serial}_{mode}"
+            settings[new_key] = {"source": "ondotori", "serial": new_serial, "name": new_name, "x": img_w // 2, "y": img_h // 2, "mode": mode}
+            save_settings(settings)
+            st.success(f"{new_name} を登録しました！")
+            st.rerun()
+        elif selected_source == "GL840 (ローカルCSV)" and new_ch and new_name:
+            new_ch = new_ch.upper().strip()
+            new_key = f"gl840_{new_ch}"
+            settings[new_key] = {"source": "gl840", "ch": new_ch, "name": new_name, "x": img_w // 2, "y": img_h // 2}
             save_settings(settings)
             st.success(f"{new_name} を登録しました！")
             st.rerun()
         else:
-            st.warning("シリアル番号と名前の両方を入力してください。")
+            st.warning("必要な情報をすべて入力してください。")
 
 if settings:
     with st.sidebar.expander("🗑️ 登録済みの機器を削除", expanded=False):
-        del_key = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=lambda x: f"{settings[x]['name']} ({settings[x]['serial']})")
+        def format_del_label(k):
+            info = settings[k]
+            if info.get("source") == "gl840":
+                return f"{info['name']} ({info['ch']})"
+            else:
+                return f"{info['name']} ({info['serial']})"
+                
+        del_key = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=format_del_label)
         if st.button("この機器を削除"):
             del settings[del_key]
             save_settings(settings)
@@ -278,7 +340,6 @@ else:
 # ==========================================
 # UI: メイン画面（モニター表示）
 # ==========================================
-# 🌟 全画面モード時のCSSハック（不要なメニューをすべて隠す）
 if st.session_state.monitor_mode:
     st.markdown("""
         <style>
@@ -294,68 +355,89 @@ if st.session_state.monitor_mode:
     with col1:
         st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
     with col2:
-        st.write("") # 位置調整用の空行
+        st.write("")
         if st.button("⚙️ 設定画面に戻る", use_container_width=True):
             st.session_state.monitor_mode = False
             st.rerun()
 else:
     st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
 
-current_data = None
-try:
-    api_key = st.secrets["ondotori"]["api_key"]
-    login_id = st.secrets["ondotori"]["login_id"]
-    login_pass = st.secrets["ondotori"]["login_pass"]
-    
-    with st.spinner("おんどとりから最新データを取得中..."):
-        settings_serials = list(set([info["serial"] for info in settings.values()]))
-        current_data = fetch_ondotori_data(api_key, login_id, login_pass, settings_serials)
-        
-        if current_data and "error" in current_data:
-            st.error(f"データ取得エラー: {current_data['error']}")
-            current_data = None
-except KeyError:
-    st.error("⚠️ APIキーが設定されていません。Streamlit CloudのSecretsを設定してください。")
+current_data_ondotori = {}
+current_data_gl840 = {}
+
+with st.spinner("最新データを取得中..."):
+    # おんどとりのデータ取得
+    ondotori_serials = list(set([info["serial"] for info in settings.values() if info.get("source", "ondotori") == "ondotori"]))
+    if ondotori_serials:
+        try:
+            api_key = st.secrets["ondotori"]["api_key"]
+            login_id = st.secrets["ondotori"]["login_id"]
+            login_pass = st.secrets["ondotori"]["login_pass"]
+            current_data_ondotori = fetch_ondotori_data(api_key, login_id, login_pass, ondotori_serials)
+            if "error" in current_data_ondotori:
+                st.error(f"おんどとり取得エラー: {current_data_ondotori['error']}")
+        except KeyError:
+            st.error("⚠️ おんどとりのAPIキーが設定されていません。")
+
+    # GL840のデータ取得
+    gl840_chs = list(set([info["ch"] for info in settings.values() if info.get("source") == "gl840"]))
+    if gl840_chs:
+        current_data_gl840 = fetch_gl840_data()
+        if "error" in current_data_gl840:
+            st.error(f"GL840取得エラー: {current_data_gl840['error']}")
 
 if bg_b64:
     html_content = f'<div style="position: relative; width: 100%; max-width: {img_w}px; margin: 0 auto; border: 1px solid #ccc;"><img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; display: block;" />'
     
-    if current_data and settings:
+    if settings:
         for key, info in settings.items():
-            serial = info["serial"]
-            mode = info.get("mode", "all")
+            source = info.get("source", "ondotori")
             x, y = info["x"], info["y"]
             
             left_pct = (x / img_w) * 100
             top_pct = (y / img_h) * 100
             
-            ch1_val = current_data.get(serial, {}).get("ch1_val", "--")
-            ch1_unit = current_data.get(serial, {}).get("ch1_unit", "℃")
-            ch2_val = current_data.get(serial, {}).get("ch2_val", "--")
-            ch2_unit = current_data.get(serial, {}).get("ch2_unit", "%")
-            last_update = current_data.get(serial, {}).get("last_update", "--")
-            
             border_color = "#ff4b4b" if key == selected_key and not st.session_state.monitor_mode else "#aaa"
             box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if key == selected_key and not st.session_state.monitor_mode else "0 2px 6px rgba(0,0,0,0.2)"
             
             def get_color(unit):
-                if "C" in unit or "℃" in unit: return "#d32f2f"
-                if "%" in unit or "rh" in unit.lower(): return "#1976d2"
+                if "C" in unit or "℃" in unit: return "#d32f2f" # 赤
+                if "%" in unit or "rh" in unit.lower(): return "#1976d2" # 青
+                if "V" in unit or "mV" in unit: return "#2e7d32" # 緑
                 return "#333333"
+            
+            content_html = ""
+            last_update = "--"
+            
+            if source == "ondotori":
+                serial = info["serial"]
+                mode = info.get("mode", "all")
                 
-            ch1_color = get_color(ch1_unit)
-            ch2_color = get_color(ch2_unit)
-            
-            ch1_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch1_color}; line-height: 1.1;">{ch1_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
-            ch2_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1; margin-top: 2px;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
-            ch2_only_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
-            
-            if mode == "ch1":
-                content_html = ch1_html
-            elif mode == "ch2":
-                content_html = ch2_only_html
-            else:
-                content_html = ch1_html + ch2_html
+                ch1_val = current_data_ondotori.get(serial, {}).get("ch1_val", "--")
+                ch1_unit = current_data_ondotori.get(serial, {}).get("ch1_unit", "℃")
+                ch2_val = current_data_ondotori.get(serial, {}).get("ch2_val", "--")
+                ch2_unit = current_data_ondotori.get(serial, {}).get("ch2_unit", "%")
+                last_update = current_data_ondotori.get(serial, {}).get("last_update", "--")
+                
+                ch1_color = get_color(ch1_unit)
+                ch2_color = get_color(ch2_unit)
+                
+                ch1_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch1_color}; line-height: 1.1;">{ch1_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
+                ch2_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1; margin-top: 2px;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+                ch2_only_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+                
+                if mode == "ch1": content_html = ch1_html
+                elif mode == "ch2": content_html = ch2_only_html
+                else: content_html = ch1_html + ch2_html
+                
+            elif source == "gl840":
+                ch = info["ch"]
+                val = current_data_gl840.get(ch, {}).get("val", "--")
+                unit = current_data_gl840.get(ch, {}).get("unit", "")
+                last_update = current_data_gl840.get(ch, {}).get("time", "--")
+                
+                color = get_color(unit)
+                content_html = f'<div style="font-size: 20px; font-weight: bold; color: {color}; line-height: 1.1;">{val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{unit}</span></div>' if val != "--" else ""
             
             card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 2px solid {border_color}; border-radius: 6px; padding: 4px 8px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10; white-space: nowrap;"><div style="font-size: 12px; font-weight: bold; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px;">{info["name"]}</div>{content_html}<div style="font-size: 10px; color: #888; margin-top: 4px;">{last_update}</div></div>'
             html_content += card_html
@@ -365,4 +447,4 @@ if bg_b64:
 else:
     st.info(f"※左のメニューから「{current_floor}」の図面(画像またはPDF)をアップロードしてください")
 
-st.markdown('<meta http-equiv="refresh" content="300">', unsafe_allow_html=True)
+st.markdown('<meta http-equiv="refresh" content="60">', unsafe_allow_html=True)
