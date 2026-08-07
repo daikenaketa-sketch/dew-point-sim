@@ -3,3 +3,4 @@ matplotlib
 scipy
 Pillow
 requests
+PyMuPDF
