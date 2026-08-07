@@ -10,7 +10,7 @@ import fitz  # PDFを読み込むためのツール(PyMuPDF)
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
 # ==========================================
-# 🌟 新機能：複数フロア（図面）の管理
+# 複数フロア（図面）の管理
 # ==========================================
 FLOORS_FILE = "floors.json"
 
@@ -26,7 +26,6 @@ def save_floors(floors):
 
 floors = load_floors()
 
-# 💡 今まで作ったデータを「メイン」として自動引き継ぎする処理
 if os.path.exists("monitor_settings.json") and not os.path.exists("settings_メイン.json"):
     os.rename("monitor_settings.json", "settings_メイン.json")
 if os.path.exists("monitor_bg.png") and not os.path.exists("bg_メイン.png"):
@@ -72,7 +71,21 @@ BG_IMAGE_FILE = f"bg_{current_floor}.png"
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            # 🌟 過去のデータを新フォーマット（ch分割対応）に自動変換
+            new_data = {}
+            changed = False
+            for k, v in data.items():
+                if "serial" not in v:
+                    new_key = f"{k}_all"
+                    new_data[new_key] = {"serial": k, "name": v["name"], "x": v["x"], "y": v["y"], "mode": "all"}
+                    changed = True
+                else:
+                    new_data[k] = v
+            if changed:
+                with open(SETTINGS_FILE, "w", encoding="utf-8") as fw:
+                    json.dump(new_data, fw, ensure_ascii=False, indent=4)
+            return new_data
     return {}
 
 def save_settings(settings):
@@ -193,13 +206,27 @@ st.sidebar.divider()
 st.sidebar.subheader("2. 機器の登録・管理")
 with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expanded=False):
     new_serial = st.text_input("シリアル番号 (例: 5214A123)")
-    new_name = st.text_input("画面に表示する名前 (例: 体育館)")
+    new_name = st.text_input("画面に表示する名前 (例: 6m地点)")
+    
+    # 🌟 新機能：表示モードの選択
+    mode_options = {
+        "両方表示 (ch1 & ch2)": "all",
+        "ch1のみ表示": "ch1",
+        "ch2のみ表示": "ch2"
+    }
+    selected_mode_label = st.selectbox("表示タイプ", list(mode_options.keys()))
+
     if st.button("登録・更新する"):
         if new_serial and new_name:
-            if new_serial not in settings:
-                settings[new_serial] = {"name": new_name, "x": img_w // 2, "y": img_h // 2}
+            mode = mode_options[selected_mode_label]
+            new_key = f"{new_serial}_{mode}" # シリアルとモードを組み合わせた一意のキー
+            
+            if new_key not in settings:
+                settings[new_key] = {"serial": new_serial, "name": new_name, "x": img_w // 2, "y": img_h // 2, "mode": mode}
             else:
-                settings[new_serial]["name"] = new_name
+                settings[new_key]["name"] = new_name
+                settings[new_key]["serial"] = new_serial
+                settings[new_key]["mode"] = mode
             save_settings(settings)
             st.success(f"{new_name} を登録しました！")
             st.rerun()
@@ -208,9 +235,9 @@ with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expande
 
 if settings:
     with st.sidebar.expander("🗑️ 登録済みの機器を削除", expanded=False):
-        del_serial = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=lambda x: f"{settings[x]['name']} ({x})")
+        del_key = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=lambda x: f"{settings[x]['name']} ({settings[x]['serial']})")
         if st.button("この機器を削除"):
-            del settings[del_serial]
+            del settings[del_key]
             save_settings(settings)
             st.success("削除しました！")
             st.rerun()
@@ -218,21 +245,21 @@ if settings:
 st.sidebar.divider()
 
 st.sidebar.subheader("3. 測定ポイントの位置調整")
-selected_serial = None
+selected_key = None
 if settings:
-    selected_serial = st.sidebar.selectbox("動かしたいポイントを選択", options=list(settings.keys()), format_func=lambda x: settings[x]["name"])
+    selected_key = st.sidebar.selectbox("動かしたいポイントを選択", options=list(settings.keys()), format_func=lambda x: settings[x]["name"])
     
     max_x = max(img_w, 1)
     max_y = max(img_h, 1)
-    current_x = min(settings[selected_serial]["x"], max_x)
-    current_y = min(settings[selected_serial]["y"], max_y)
+    current_x = min(settings[selected_key]["x"], max_x)
+    current_y = min(settings[selected_key]["y"], max_y)
 
-    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=f"x_{current_floor}_{selected_serial}")
-    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=f"y_{current_floor}_{selected_serial}")
+    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=f"x_{current_floor}_{selected_key}")
+    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=f"y_{current_floor}_{selected_key}")
 
-    if new_x != settings[selected_serial]["x"] or new_y != settings[selected_serial]["y"]:
-        settings[selected_serial]["x"] = new_x
-        settings[selected_serial]["y"] = new_y
+    if new_x != settings[selected_key]["x"] or new_y != settings[selected_key]["y"]:
+        settings[selected_key]["x"] = new_x
+        settings[selected_key]["y"] = new_y
         save_settings(settings)
 else:
     st.sidebar.info("先に「2. 機器の登録」を行ってください。")
@@ -249,8 +276,9 @@ try:
     login_pass = st.secrets["ondotori"]["login_pass"]
     
     with st.spinner("おんどとりから最新データを取得中..."):
-        settings_keys = tuple(settings.keys())
-        current_data = fetch_ondotori_data(api_key, login_id, login_pass, settings_keys)
+        # 🌟 必要なシリアル番号だけを抽出してAPIにリクエスト
+        settings_serials = list(set([info["serial"] for info in settings.values()]))
+        current_data = fetch_ondotori_data(api_key, login_id, login_pass, settings_serials)
         
         if current_data and "error" in current_data:
             st.error(f"データ取得エラー: {current_data['error']}")
@@ -262,7 +290,9 @@ if bg_b64:
     html_content = f'<div style="position: relative; width: 100%; max-width: {img_w}px; margin: 0 auto; border: 1px solid #ccc;"><img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; display: block;" />'
     
     if current_data and settings:
-        for serial, info in settings.items():
+        for key, info in settings.items():
+            serial = info["serial"]
+            mode = info.get("mode", "all")
             x, y = info["x"], info["y"]
             
             left_pct = (x / img_w) * 100
@@ -274,8 +304,8 @@ if bg_b64:
             ch2_unit = current_data.get(serial, {}).get("ch2_unit", "%")
             last_update = current_data.get(serial, {}).get("last_update", "--")
             
-            border_color = "#ff4b4b" if serial == selected_serial else "#aaa"
-            box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if serial == selected_serial else "0 2px 6px rgba(0,0,0,0.2)"
+            border_color = "#ff4b4b" if key == selected_key else "#aaa"
+            box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if key == selected_key else "0 2px 6px rgba(0,0,0,0.2)"
             
             def get_color(unit):
                 if "C" in unit or "℃" in unit: return "#d32f2f" # 赤色
@@ -285,10 +315,19 @@ if bg_b64:
             ch1_color = get_color(ch1_unit)
             ch2_color = get_color(ch2_unit)
             
+            # 🌟 モードに応じて表示するHTMLを切り替え
             ch1_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch1_color}; line-height: 1.1;">{ch1_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
             ch2_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1; margin-top: 2px;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+            ch2_only_html = f'<div style="font-size: 20px; font-weight: bold; color: {ch2_color}; line-height: 1.1;">{ch2_val}<span style="font-size: 12px; font-weight: normal; margin-left: 2px;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
             
-            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 2px solid {border_color}; border-radius: 6px; padding: 4px 8px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10; white-space: nowrap;"><div style="font-size: 12px; font-weight: bold; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px;">{info["name"]}</div>{ch1_html}{ch2_html}<div style="font-size: 10px; color: #888; margin-top: 4px;">{last_update}</div></div>'
+            if mode == "ch1":
+                content_html = ch1_html
+            elif mode == "ch2":
+                content_html = ch2_only_html
+            else:
+                content_html = ch1_html + ch2_html
+            
+            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 2px solid {border_color}; border-radius: 6px; padding: 4px 8px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10; white-space: nowrap;"><div style="font-size: 12px; font-weight: bold; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px;">{info["name"]}</div>{content_html}<div style="font-size: 10px; color: #888; margin-top: 4px;">{last_update}</div></div>'
             html_content += card_html
 
     html_content += "</div>"
