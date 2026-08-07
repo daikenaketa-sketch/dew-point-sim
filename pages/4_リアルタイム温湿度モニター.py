@@ -50,8 +50,10 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
             serial = device.get("serial")
             if serial in settings_keys:
                 channels = device.get("channel", [])
-                temp = next((ch["value"] for ch in channels if ch["num"] == 1), "--")
-                rh = next((ch["value"] for ch in channels if ch["num"] == 2), "--")
+                
+                # 🌟 修正点1: チャンネル番号が文字(str)で来ても数字(int)で来ても確実に読み取る
+                temp = next((ch.get("value", "--") for ch in channels if str(ch.get("num")) == "1"), "--")
+                rh = next((ch.get("value", "--") for ch in channels if str(ch.get("num")) == "2"), "--")
                 
                 unixtime = device.get("unixtime")
                 if unixtime:
@@ -76,12 +78,10 @@ st.sidebar.header("⚙️ 管理者メニュー")
 st.sidebar.subheader("1. 図面のアップロード")
 uploaded_file = st.sidebar.file_uploader("新しい図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
 
-# 🌟 修正点1: 新しいファイルがアップロードされた時「1回だけ」保存するように記憶させる
 if uploaded_file is not None:
     if "processed_file_id" not in st.session_state or st.session_state.processed_file_id != uploaded_file.file_id:
         try:
             if uploaded_file.name.lower().endswith(".pdf"):
-                # getvalue() を使うことでデータが空になるのを防ぐ
                 doc = fitz.open(stream=uploaded_file.getvalue(), filetype="pdf")
                 page = doc.load_page(0)
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
@@ -95,16 +95,13 @@ if uploaded_file is not None:
         except Exception as e:
             st.sidebar.error(f"図面の読み込みに失敗しました: {e}")
 
-# ==========================================
-# 🌟 修正点2: 画像の読み込み処理をアップロードの「後」に移動し、エラーを防ぐ
-# ==========================================
 bg_b64 = None
 img_w, img_h = 1200, 800
 
 if os.path.exists(BG_IMAGE_FILE):
     try:
         img = Image.open(BG_IMAGE_FILE)
-        img.verify() # 破損チェック
+        img.verify()
         img = Image.open(BG_IMAGE_FILE)
         img.load() 
         img_w, img_h = img.size
@@ -158,8 +155,9 @@ if settings:
     current_x = min(settings[selected_serial]["x"], max_x)
     current_y = min(settings[selected_serial]["y"], max_y)
 
-    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x)
-    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y)
+    # 🌟 修正点2: スライダーに key を設定し、1回で確実に動くように修正
+    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=f"x_{selected_serial}")
+    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=f"y_{selected_serial}")
 
     if new_x != settings[selected_serial]["x"] or new_y != settings[selected_serial]["y"]:
         settings[selected_serial]["x"] = new_x
@@ -203,10 +201,14 @@ if bg_b64:
             rh = current_data.get(serial, {}).get("rh", "--")
             last_update = current_data.get(serial, {}).get("last_update", "--")
             
-            border_color = "#ff4b4b" if serial == selected_serial else "#ddd"
-            box_shadow = "0 8px 16px rgba(255, 75, 75, 0.4)" if serial == selected_serial else "0 4px 8px rgba(0,0,0,0.15)"
+            border_color = "#ff4b4b" if serial == selected_serial else "#aaa"
+            box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if serial == selected_serial else "0 2px 6px rgba(0,0,0,0.2)"
             
-            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 3px solid {border_color}; border-radius: 10px; padding: 10px 15px; box-shadow: {box_shadow}; text-align: center; min-width: 140px; z-index: 10; white-space: nowrap;"><div style="font-size: 14px; font-weight: bold; color: #333; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 8px;">{info["name"]}</div><div style="font-size: 32px; font-weight: bold; color: #000; line-height: 1.1;">{temp}<span style="font-size: 16px; font-weight: normal; color: #666;">℃</span></div><div style="font-size: 22px; font-weight: bold; color: #000; line-height: 1.1; margin-top: 4px;">{rh}<span style="font-size: 14px; font-weight: normal; color: #666;">%</span></div><div style="font-size: 11px; color: #888; margin-top: 8px;">最終更新: {last_update}</div></div>'
+            # 🌟 修正点3: 湿度が無い場合は湿度行を消してコンパクトにする
+            rh_html = f'<div style="font-size: 16px; font-weight: bold; color: #000; line-height: 1.0; margin-top: 4px;">{rh}<span style="font-size: 10px; font-weight: normal; color: #666;">%</span></div>' if rh != "--" else ""
+            
+            # 🌟 修正点4: 余白を削り、全体をコンパクトに再設計
+            card_html = f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); background-color: rgba(255, 255, 255, 0.95); border: 2px solid {border_color}; border-radius: 6px; padding: 4px 8px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10; white-space: nowrap;"><div style="font-size: 12px; font-weight: bold; color: #333; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin-bottom: 4px;">{info["name"]}</div><div style="font-size: 24px; font-weight: bold; color: #000; line-height: 1.0;">{temp}<span style="font-size: 12px; font-weight: normal; color: #666;">℃</span></div>{rh_html}<div style="font-size: 10px; color: #888; margin-top: 4px;">{last_update}</div></div>'
             html_content += card_html
 
     html_content += "</div>"
