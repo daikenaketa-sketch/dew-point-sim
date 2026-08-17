@@ -7,6 +7,8 @@ import os
 import glob
 import requests
 import fitz  # PDFを読み込むためのツール(PyMuPDF)
+import shutil
+import tempfile
 
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
@@ -15,6 +17,26 @@ st.set_page_config(page_title="リアルタイム温湿度モニター", layout=
 # ==========================================
 if "monitor_mode" not in st.session_state:
     st.session_state.monitor_mode = False
+
+# ==========================================
+# アプリ全体の設定管理（フォルダパスの記憶用）
+# ==========================================
+APP_SETTINGS_FILE = "app_settings.json"
+
+def load_app_settings():
+    if os.path.exists(APP_SETTINGS_FILE):
+        try:
+            with open(APP_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"gl840_dir": "gl840_data"}
+
+def save_app_settings(settings):
+    with open(APP_SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=4)
+
+app_settings = load_app_settings()
 
 # ==========================================
 # 複数フロア（図面）の管理
@@ -165,19 +187,40 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
 
 @st.cache_data(ttl=60) # GL840はローカルなので1分更新
 def fetch_gl840_data(folder_path):
+    # パスの前後の引用符を削除（コピペ対策）
+    folder_path = folder_path.strip('\'"')
+    
     if not os.path.exists(folder_path):
         return {"error": f"指定されたフォルダ '{folder_path}' が見つかりません。"}
         
-    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
+    # サブフォルダも含めて再帰的にCSVを検索（大文字・小文字対応）
+    csv_files = glob.glob(os.path.join(folder_path, "**", "*.csv"), recursive=True)
+    csv_files.extend(glob.glob(os.path.join(folder_path, "**", "*.CSV"), recursive=True))
+    
     if not csv_files:
-        return {"error": f"'{folder_path}' 内にCSVファイルがありません。"}
+        return {"error": f"'{folder_path}' 内（サブフォルダ含む）にCSVファイルが見つかりません。"}
     
     # 最新のCSVファイルを取得
     latest_file = max(csv_files, key=os.path.getctime)
     
     try:
-        with open(latest_file, "r", encoding="shift_jis", errors="replace") as f:
+        # 記録中でファイルがロック（読み取り専用）されている場合を回避するため、
+        # 一時ファイルにコピーしてから読み込む
+        temp_dir = tempfile.gettempdir()
+        temp_file = os.path.join(temp_dir, "temp_gl840_read.csv")
+        
+        try:
+            shutil.copy2(latest_file, temp_file)
+            target_file = temp_file
+        except Exception:
+            # コピーすらできない場合は直接読み込みを試みる
+            target_file = latest_file
+
+        with open(target_file, "r", encoding="shift_jis", errors="replace") as f:
             lines = f.readlines()
+            
+        if target_file == temp_file and os.path.exists(temp_file):
+            os.remove(temp_file)
             
         header_idx = -1
         for i, line in enumerate(lines):
@@ -237,7 +280,7 @@ def fetch_gl840_data(folder_path):
                     }
         return result
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"ファイルの読み込みエラー: {str(e)}"}
 
 # ==========================================
 # UI: サイドバー（管理者メニュー）
@@ -246,11 +289,19 @@ st.sidebar.header("⚙️ 管理者メニュー")
 
 # --- GL840 フォルダ設定 ---
 st.sidebar.subheader("📁 ローカルデータ設定 (GL840)")
-gl840_dir = st.sidebar.text_input(
+input_gl840_dir = st.sidebar.text_input(
     "GL840 CSVフォルダのパス", 
-    value="gl840_data", 
+    value=app_settings.get("gl840_dir", "gl840_data"), 
     help="測定ロガーがCSVを保存するPC上の絶対パス（例: C:\\Users\\Name\\Documents\\GL840）を指定してください。"
 )
+
+# 入力されたパスが変更されたら設定ファイルに保存する
+if input_gl840_dir != app_settings.get("gl840_dir", "gl840_data"):
+    app_settings["gl840_dir"] = input_gl840_dir
+    save_app_settings(app_settings)
+
+gl840_dir = app_settings.get("gl840_dir", "gl840_data")
+
 if not os.path.exists(gl840_dir):
     try:
         os.makedirs(gl840_dir, exist_ok=True)
