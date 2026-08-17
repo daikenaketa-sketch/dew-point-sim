@@ -4,7 +4,6 @@ from PIL import Image
 import datetime
 import json
 import os
-import glob
 import requests
 import fitz  # PDFを読み込むためのツール(PyMuPDF)
 import shutil
@@ -187,18 +186,24 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
 
 @st.cache_data(ttl=60) # GL840はローカルなので1分更新
 def fetch_gl840_data(folder_path):
-    # パスの前後の引用符を削除（コピペ対策）
-    folder_path = folder_path.strip('\'"')
+    # パスの前後の引用符や空白を削除し、Windowsのバックスラッシュをスラッシュに変換（超重要）
+    folder_path = folder_path.strip(' \'"').replace('\\', '/')
     
     if not os.path.exists(folder_path):
-        return {"error": f"指定されたフォルダ '{folder_path}' が見つかりません。"}
+        return {"error": f"指定されたフォルダが見つかりません: {folder_path}"}
         
-    # サブフォルダも含めて再帰的にCSVを検索（大文字・小文字対応）
-    csv_files = glob.glob(os.path.join(folder_path, "**", "*.csv"), recursive=True)
-    csv_files.extend(glob.glob(os.path.join(folder_path, "**", "*.CSV"), recursive=True))
+    # os.walkを使って、どんなに深いサブフォルダにあっても確実にCSVを探し出す
+    csv_files = []
+    try:
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.lower().endswith('.csv'):
+                    csv_files.append(os.path.join(root, file))
+    except Exception as e:
+        return {"error": f"フォルダの検索中にエラーが発生しました: {str(e)}"}
     
     if not csv_files:
-        return {"error": f"'{folder_path}' 内（サブフォルダ含む）にCSVファイルが見つかりません。"}
+        return {"error": f"フォルダ内にCSVファイルが見つかりません: {folder_path}"}
     
     # 最新のCSVファイルを取得
     latest_file = max(csv_files, key=os.path.getctime)
@@ -216,8 +221,12 @@ def fetch_gl840_data(folder_path):
             # コピーすらできない場合は直接読み込みを試みる
             target_file = latest_file
 
-        with open(target_file, "r", encoding="shift_jis", errors="replace") as f:
-            lines = f.readlines()
+        # ロックを回避するために、一度バイナリで読み込んでからテキストに変換する（超重要）
+        with open(target_file, "rb") as f:
+            raw_data = f.read()
+            
+        text_data = raw_data.decode("shift_jis", errors="replace")
+        lines = text_data.splitlines()
             
         if target_file == temp_file and os.path.exists(temp_file):
             os.remove(temp_file)
