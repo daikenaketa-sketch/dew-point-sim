@@ -11,13 +11,10 @@ import fitz  # PDFを読み込むためのツール(PyMuPDF)
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
 # ==========================================
-# 初期設定・フォルダ作成
+# 初期設定
 # ==========================================
 if "monitor_mode" not in st.session_state:
     st.session_state.monitor_mode = False
-
-GL840_DIR = "gl840_data"
-os.makedirs(GL840_DIR, exist_ok=True)
 
 # ==========================================
 # 複数フロア（図面）の管理
@@ -167,11 +164,15 @@ def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
         return {"error": str(e)}
 
 @st.cache_data(ttl=60) # GL840はローカルなので1分更新
-def fetch_gl840_data():
-    csv_files = glob.glob(os.path.join(GL840_DIR, "*.csv"))
+def fetch_gl840_data(folder_path):
+    if not os.path.exists(folder_path):
+        return {"error": f"指定されたフォルダ '{folder_path}' が見つかりません。"}
+        
+    csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
     if not csv_files:
-        return {"error": f"'{GL840_DIR}' フォルダにCSVファイルがありません。"}
+        return {"error": f"'{folder_path}' 内にCSVファイルがありません。"}
     
+    # 最新のCSVファイルを取得
     latest_file = max(csv_files, key=os.path.getctime)
     
     try:
@@ -180,25 +181,30 @@ def fetch_gl840_data():
             
         header_idx = -1
         for i, line in enumerate(lines):
-            if line.startswith("番号,日付 時間,ms,"):
+            # グラフテックのデータ開始行を特定
+            if line.startswith("番号,日付 時間,ms,") or line.startswith("NO.,Time,ms,"):
                 header_idx = i
                 break
                 
         if header_idx == -1 or len(lines) <= header_idx + 2:
-            return {"error": "CSVのフォーマットが異なります。"}
+            return {"error": "CSVのフォーマットが異なります（データ行が見つかりません）。"}
             
         headers = lines[header_idx].strip().split(",")
         units = lines[header_idx + 1].strip().split(",")
         
+        # データ行のみを抽出（空行を除外）
         data_lines = [l.strip() for l in lines[header_idx+2:] if l.strip()]
         if not data_lines:
-            return {"error": "データ行がありません。"}
+            return {"error": "データが記録されていません。"}
             
+        # 一番最後の行（最新データ）を取得
         latest_data = data_lines[-1].split(",")
-        time_str = latest_data[1]
+        time_str = latest_data[1] # 日付 時間の列
         
         try:
-            dt = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            # 時刻フォーマットの吸収 (2025/9/1 17:22:09 または 2025-09-01 17:22:09)
+            time_str_clean = time_str.replace("/", "-")
+            dt = datetime.datetime.strptime(time_str_clean, "%Y-%m-%d %H:%M:%S")
             formatted_time = dt.strftime("%m/%d %H:%M")
         except:
             formatted_time = time_str
@@ -206,13 +212,29 @@ def fetch_gl840_data():
         result = {}
         for i, col_name in enumerate(headers):
             if col_name.startswith("CH"):
-                val = latest_data[i]
-                unit = units[i].replace("ﾟC", "℃").replace("C", "℃")
-                result[col_name] = {
-                    "val": val,
-                    "unit": unit,
-                    "time": formatted_time
-                }
+                if i < len(latest_data):
+                    val = latest_data[i]
+                    
+                    # 単位のクリーニング（文字化けや表記ブレを吸収）
+                    unit = ""
+                    if i < len(units):
+                        raw_unit = units[i].strip()
+                        if "C" in raw_unit or "℃" in raw_unit or "ﾟC" in raw_unit:
+                            unit = "℃"
+                        elif "mV" in raw_unit:
+                            unit = "mV"
+                        elif "V" in raw_unit:
+                            unit = "V"
+                        elif "%" in raw_unit or "RH" in raw_unit.upper():
+                            unit = "%"
+                        else:
+                            unit = raw_unit.replace("·", "").strip()
+                            
+                    result[col_name] = {
+                        "val": val,
+                        "unit": unit,
+                        "time": formatted_time
+                    }
         return result
     except Exception as e:
         return {"error": str(e)}
@@ -221,6 +243,21 @@ def fetch_gl840_data():
 # UI: サイドバー（管理者メニュー）
 # ==========================================
 st.sidebar.header("⚙️ 管理者メニュー")
+
+# --- GL840 フォルダ設定 ---
+st.sidebar.subheader("📁 ローカルデータ設定 (GL840)")
+gl840_dir = st.sidebar.text_input(
+    "GL840 CSVフォルダのパス", 
+    value="gl840_data", 
+    help="測定ロガーがCSVを保存するPC上の絶対パス（例: C:\\Users\\Name\\Documents\\GL840）を指定してください。"
+)
+if not os.path.exists(gl840_dir):
+    try:
+        os.makedirs(gl840_dir, exist_ok=True)
+    except:
+        pass # 権限エラー等の場合は無視（メイン画面でエラー表示される）
+
+st.sidebar.divider()
 
 st.sidebar.subheader("1. 図面のアップロード")
 uploaded_file = st.sidebar.file_uploader(f"「{current_floor}」の図面を選択 (PDFも可)", type=["png", "jpg", "jpeg", "pdf"])
@@ -277,7 +314,7 @@ with st.sidebar.expander(f"➕ 「{current_floor}」に機器を登録", expande
         selected_mode_label = st.selectbox("表示タイプ", list(mode_options.keys()))
     else:
         new_ch = st.text_input("チャンネル番号 (例: CH1, CH2)")
-        st.caption(f"※CSVファイルはアプリと同じ場所の `{GL840_DIR}` フォルダに保存されるように設定してください。")
+        st.caption(f"※上の「ローカルデータ設定」で指定したフォルダ内の最新CSVからデータを読み取ります。")
 
     new_name = st.text_input("画面に表示する名前 (例: 6m地点)")
 
@@ -382,7 +419,7 @@ with st.spinner("最新データを取得中..."):
     # GL840のデータ取得
     gl840_chs = list(set([info["ch"] for info in settings.values() if info.get("source") == "gl840"]))
     if gl840_chs:
-        current_data_gl840 = fetch_gl840_data()
+        current_data_gl840 = fetch_gl840_data(gl840_dir)
         if "error" in current_data_gl840:
             st.error(f"GL840取得エラー: {current_data_gl840['error']}")
 
