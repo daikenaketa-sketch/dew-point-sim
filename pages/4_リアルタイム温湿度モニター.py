@@ -293,11 +293,23 @@ if settings:
 # UI: メイン画面（モニター表示）
 # ==========================================
 if st.session_state.monitor_mode:
+    # ★ ここが修正ポイント：サイドバーを完全に消すCSSを追加しました ★
     st.markdown("""
     <style>
-        [data-testid="collapsedControl"] {display: none;}
+        /* サイドバー自体を完全に非表示にする */
+        [data-testid="stSidebar"] {display: none !important;}
+        /* サイドバー開閉用の矢印を非表示にする */
+        [data-testid="collapsedControl"] {display: none !important;}
+        /* 上部のヘッダー（Deployボタンなど）を非表示にする */
         header {display: none !important;}
-        .block-container {padding-top: 1rem; padding-bottom: 1rem;}
+        /* メイン画面の余白を極限まで減らして画面を広く使う */
+        .block-container {
+            padding-top: 2rem !important; 
+            padding-bottom: 1rem !important; 
+            padding-left: 1rem !important; 
+            padding-right: 1rem !important; 
+            max-width: 100% !important;
+        }
     </style>
     """, unsafe_allow_html=True)
     
