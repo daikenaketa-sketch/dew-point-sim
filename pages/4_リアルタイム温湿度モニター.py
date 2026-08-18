@@ -255,7 +255,6 @@ if settings:
             info = settings[k]
             return f"{info['name']} ({info['serial']})"
         
-        # 削除用のセレクトボックスに専用のキーを付与
         del_key = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=format_del_label, key="del_device_select")
         if st.button("この機器を削除"):
             del settings[del_key]
@@ -268,7 +267,6 @@ st.sidebar.divider()
 st.sidebar.subheader("3. 測定ポイントの位置調整")
 selected_key = None
 if settings:
-    # 位置調整用のセレクトボックスに専用のキーを付与
     selected_key = st.sidebar.selectbox("動かしたいポイントを選択", options=list(settings.keys()), format_func=lambda x: settings[x]["name"], key="move_device_select")
     
     max_x = max(img_w, 1)
@@ -279,13 +277,11 @@ if settings:
     slider_key_x = f"x_{current_floor}_{selected_key}"
     slider_key_y = f"y_{current_floor}_{selected_key}"
 
-    # スライダーを動かした瞬間だけ座標を保存するコールバック関数
     def update_position():
         settings[selected_key]["x"] = st.session_state[slider_key_x]
         settings[selected_key]["y"] = st.session_state[slider_key_y]
         save_settings(settings)
 
-    # on_changeを使って、意図しない上書きを防止
     st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=slider_key_x, on_change=update_position)
     st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=slider_key_y, on_change=update_position)
 
@@ -293,34 +289,41 @@ if settings:
 # UI: メイン画面（モニター表示）
 # ==========================================
 if st.session_state.monitor_mode:
-    # ★ ここが修正ポイント：サイドバーを完全に消すCSSを追加しました ★
+    # ★ 究極の全画面化CSS ★
     st.markdown("""
     <style>
-        /* サイドバー自体を完全に非表示にする */
+        /* サイドバー、ヘッダー、フッターを完全に非表示 */
         [data-testid="stSidebar"] {display: none !important;}
-        /* サイドバー開閉用の矢印を非表示にする */
         [data-testid="collapsedControl"] {display: none !important;}
-        /* 上部のヘッダー（Deployボタンなど）を非表示にする */
         header {display: none !important;}
-        /* メイン画面の余白を極限まで減らして画面を広く使う */
+        footer {display: none !important;}
+        
+        /* メイン画面の余白を完全にゼロにする */
         .block-container {
-            padding-top: 2rem !important; 
-            padding-bottom: 1rem !important; 
-            padding-left: 1rem !important; 
-            padding-right: 1rem !important; 
+            padding: 0 !important; 
             max-width: 100% !important;
+            margin: 0 !important;
+        }
+        
+        /* 戻るボタンを右下に小さく半透明で固定配置 */
+        div[data-testid="stButton"] {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999;
+            opacity: 0.2;
+            transition: opacity 0.3s;
+        }
+        div[data-testid="stButton"]:hover {
+            opacity: 1.0;
         }
     </style>
     """, unsafe_allow_html=True)
     
-    col1, col2 = st.columns([8, 2])
-    with col1:
-        st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
-    with col2:
-        st.write("")
-        if st.button("⚙️ 設定画面に戻る", use_container_width=True):
-            st.session_state.monitor_mode = False
-            st.rerun()
+    # タイトルは表示せず、戻るボタンだけを配置
+    if st.button("⚙️ 設定に戻る (F11でブラウザ全画面)"):
+        st.session_state.monitor_mode = False
+        st.rerun()
 else:
     st.title(f"📡 リアルタイム温湿度モニター - {current_floor}")
 
@@ -340,8 +343,19 @@ def get_color(unit):
     return "#333333"
 
 if bg_b64:
-    html_content = f'<div style="position: relative; display: inline-block;">'
-    html_content += f'<img src="data:image/png;base64,{bg_b64}" style="width: 100%; max-width: {img_w}px; height: auto; border: 1px solid #ccc;">'
+    if st.session_state.monitor_mode:
+        # 全画面モード：画面いっぱいに広げ、アスペクト比を維持して中央配置
+        html_content = f'''
+        <div style="display: flex; justify-content: center; align-items: center; width: 100%; height: 100vh; background-color: #e0e0e0;">
+            <div style="position: relative; max-width: 100%; max-height: 100%; aspect-ratio: {img_w} / {img_h};">
+                <img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: 100%; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.2);">
+        '''
+    else:
+        # 通常モード：今まで通り
+        html_content = f'''
+        <div style="position: relative; display: inline-block; width: 100%; max-width: {img_w}px;">
+            <img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; border: 1px solid #ccc;">
+        '''
     
     if settings:
         for key, info in settings.items():
@@ -376,7 +390,6 @@ if bg_b64:
             elif mode == "ch2": content_html = ch2_only_html
             else: content_html = ch1_html + ch2_html
             
-            # 改行やインデントをなくし、完全に1行の文字列として結合（Markdownのパースエラー防止）
             card_html = (
                 f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); '
                 f'background-color: rgba(255, 255, 255, 0.9); border: 2px solid {border_color}; border-radius: 8px; '
@@ -389,6 +402,9 @@ if bg_b64:
             html_content += card_html
 
     html_content += "</div>"
+    if st.session_state.monitor_mode:
+        html_content += "</div>"
+        
     st.markdown(html_content, unsafe_allow_html=True)
 else:
     st.info(f"※左のメニューから「{current_floor}」の図面(画像またはPDF)をアップロードしてください")
