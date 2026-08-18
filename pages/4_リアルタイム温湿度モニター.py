@@ -255,7 +255,8 @@ if settings:
             info = settings[k]
             return f"{info['name']} ({info['serial']})"
         
-        del_key = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=format_del_label)
+        # 削除用のセレクトボックスに専用のキーを付与
+        del_key = st.selectbox("削除する機器を選択", options=list(settings.keys()), format_func=format_del_label, key="del_device_select")
         if st.button("この機器を削除"):
             del settings[del_key]
             save_settings(settings)
@@ -267,20 +268,26 @@ st.sidebar.divider()
 st.sidebar.subheader("3. 測定ポイントの位置調整")
 selected_key = None
 if settings:
-    selected_key = st.sidebar.selectbox("動かしたいポイントを選択", options=list(settings.keys()), format_func=lambda x: settings[x]["name"])
+    # 位置調整用のセレクトボックスに専用のキーを付与
+    selected_key = st.sidebar.selectbox("動かしたいポイントを選択", options=list(settings.keys()), format_func=lambda x: settings[x]["name"], key="move_device_select")
     
     max_x = max(img_w, 1)
     max_y = max(img_h, 1)
     current_x = min(settings[selected_key]["x"], max_x)
     current_y = min(settings[selected_key]["y"], max_y)
 
-    new_x = st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=f"x_{current_floor}_{selected_key}")
-    new_y = st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=f"y_{current_floor}_{selected_key}")
+    slider_key_x = f"x_{current_floor}_{selected_key}"
+    slider_key_y = f"y_{current_floor}_{selected_key}"
 
-    if new_x != settings[selected_key]["x"] or new_y != settings[selected_key]["y"]:
-        settings[selected_key]["x"] = new_x
-        settings[selected_key]["y"] = new_y
+    # スライダーを動かした瞬間だけ座標を保存するコールバック関数
+    def update_position():
+        settings[selected_key]["x"] = st.session_state[slider_key_x]
+        settings[selected_key]["y"] = st.session_state[slider_key_y]
         save_settings(settings)
+
+    # on_changeを使って、意図しない上書きを防止
+    st.sidebar.slider("X座標 (横)", 0, max_x, current_x, key=slider_key_x, on_change=update_position)
+    st.sidebar.slider("Y座標 (縦)", 0, max_y, current_y, key=slider_key_y, on_change=update_position)
 
 # ==========================================
 # UI: メイン画面（モニター表示）
