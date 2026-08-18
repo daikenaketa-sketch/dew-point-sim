@@ -288,8 +288,9 @@ if settings:
 if st.session_state.monitor_mode:
     st.markdown("""
     <style>
-    [data-testid="collapsedControl"] {display: none;}
-    header {display: none !important;}
+        [data-testid="collapsedControl"] {display: none;}
+        header {display: none !important;}
+        .block-container {padding-top: 1rem; padding-bottom: 1rem;}
     </style>
     """, unsafe_allow_html=True)
     
@@ -313,6 +314,12 @@ with st.spinner("最新データを取得中..."):
         if "error" in current_data_ondotori:
             st.error(f"おんどとり取得エラー: {current_data_ondotori['error']}")
 
+def get_color(unit):
+    if "C" in unit or "℃" in unit: return "#d32f2f"
+    if "%" in unit or "rh" in unit.lower(): return "#1976d2"
+    if "V" in unit or "mV" in unit: return "#2e7d32"
+    return "#333333"
+
 if bg_b64:
     html_content = f'<div style="position: relative; display: inline-block;">'
     html_content += f'<img src="data:image/png;base64,{bg_b64}" style="width: 100%; max-width: {img_w}px; height: auto; border: 1px solid #ccc;">'
@@ -326,12 +333,6 @@ if bg_b64:
             
             border_color = "#ff4b4b" if key == selected_key and not st.session_state.monitor_mode else "#aaa"
             box_shadow = "0 4px 12px rgba(255, 75, 75, 0.6)" if key == selected_key and not st.session_state.monitor_mode else "0 2px 6px rgba(0,0,0,0.2)"
-            
-            def get_color(unit):
-                if "C" in unit or "℃" in unit: return "#d32f2f"
-                if "%" in unit or "rh" in unit.lower(): return "#1976d2"
-                if "V" in unit or "mV" in unit: return "#2e7d32"
-                return "#333333"
             
             content_html = ""
             last_update = "--"
@@ -348,34 +349,24 @@ if bg_b64:
             ch1_color = get_color(ch1_unit)
             ch2_color = get_color(ch2_unit)
             
-            ch1_html = f'<div style="color: {ch1_color}; font-weight: bold; font-size: 1.2em;">{ch1_val}<span style="font-size: 0.7em;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
-            ch2_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.2em;">{ch2_val}<span style="font-size: 0.7em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
-            ch2_only_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.2em;">{ch2_val}<span style="font-size: 0.7em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+            ch1_html = f'<div style="color: {ch1_color}; font-weight: bold; font-size: 1.1em;">{ch1_val}<span style="font-size: 0.8em;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
+            ch2_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.1em;">{ch2_val}<span style="font-size: 0.8em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+            ch2_only_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.1em;">{ch2_val}<span style="font-size: 0.8em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
             
             if mode == "ch1": content_html = ch1_html
             elif mode == "ch2": content_html = ch2_only_html
             else: content_html = ch1_html + ch2_html
             
-            card_html = f'''
-            <div style="
-                position: absolute; 
-                left: {left_pct}%; 
-                top: {top_pct}%; 
-                transform: translate(-50%, -50%);
-                background-color: rgba(255, 255, 255, 0.9);
-                border: 2px solid {border_color};
-                border-radius: 8px;
-                padding: 6px 10px;
-                box-shadow: {box_shadow};
-                text-align: center;
-                min-width: 80px;
-                z-index: 10;
-            ">
-                <div style="font-size: 0.8em; color: #555; margin-bottom: 4px; border-bottom: 1px solid #eee;">{info["name"]}</div>
-                {content_html}
-                <div style="font-size: 0.65em; color: #888; margin-top: 4px;">{last_update}</div>
-            </div>
-            '''
+            # 改行やインデントをなくし、完全に1行の文字列として結合（Markdownのパースエラー防止）
+            card_html = (
+                f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); '
+                f'background-color: rgba(255, 255, 255, 0.9); border: 2px solid {border_color}; border-radius: 8px; '
+                f'padding: 6px 10px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10;">'
+                f'<div style="font-size: 0.75em; color: #555; margin-bottom: 2px; border-bottom: 1px solid #ddd; padding-bottom: 2px;">{info["name"]}</div>'
+                f'<div style="line-height: 1.2;">{content_html}</div>'
+                f'<div style="font-size: 0.65em; color: #888; margin-top: 4px;">{last_update}</div>'
+                f'</div>'
+            )
             html_content += card_html
 
     html_content += "</div>"
@@ -383,4 +374,4 @@ if bg_b64:
 else:
     st.info(f"※左のメニューから「{current_floor}」の図面(画像またはPDF)をアップロードしてください")
 
-st.markdown('<meta http-equiv="refresh" content="300">', unsafe_allow_html=True)
+st.markdown('<br><br>', unsafe_allow_html=True)
