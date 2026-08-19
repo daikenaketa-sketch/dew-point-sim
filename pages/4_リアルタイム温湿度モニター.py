@@ -5,11 +5,14 @@ import datetime
 import json
 import os
 import requests
-import fitz  # PDFを読み込むためのツール(PyMuPDF)
+import fitz # PDFを読み込むためのツール(PyMuPDF)
 import sys
-from streamlit_autorefresh import st_autorefresh  # ★追加：自動更新ライブラリを読み込む
+from streamlit_autorefresh import st_autorefresh  # ★追加：自動更新ライブラリ
 
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
+
+# ★追加：1分（60,000ミリ秒）ごとに画面を自動更新する
+st_autorefresh(interval=60000, key="monitor_autorefresh")
 
 # ==========================================
 # EXE化対応：実行されているフォルダのパスを取得
@@ -115,7 +118,8 @@ settings = load_settings()
 # ==========================================
 # データ取得関数
 # ==========================================
-@st.cache_data(ttl=300)
+# ★変更：キャッシュの保持時間を300秒(5分)から60秒(1分)に変更
+@st.cache_data(ttl=60)
 def fetch_ondotori_data(api_key, login_id, login_pass, settings_keys):
     if not api_key or not login_id or not login_pass:
         return {"error": "おんどとりの設定（APIキー等）が入力されていません。"}
@@ -293,30 +297,34 @@ if st.session_state.monitor_mode:
     # ★ 究極の全画面化CSS ★
     st.markdown("""
     <style>
-        /* サイドバー、ヘッダー、フッターを完全に非表示 */
-        [data-testid="stSidebar"] {display: none !important;}
-        [data-testid="collapsedControl"] {display: none !important;}
-        header {display: none !important;}
-        footer {display: none !important;}
-        
-        /* メイン画面の余白を完全にゼロにする */
-        .block-container {
-            padding: 0 !important; 
-            max-width: 100% !important;
+        header {visibility: hidden;}
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        .stApp {
             margin: 0 !important;
+            padding: 0 !important;
+            background-color: #000000;
         }
-        
-        /* 戻るボタンを右下に小さく半透明で固定配置 */
-        div[data-testid="stButton"] {
+        .block-container {
+            padding: 0 !important;
+            margin: 0 !important;
+            max-width: 100% !important;
+        }
+        [data-testid="stSidebar"] {
+            display: none !important;
+        }
+        .stButton>button {
             position: fixed;
             bottom: 20px;
             right: 20px;
             z-index: 9999;
-            opacity: 0.2;
-            transition: opacity 0.3s;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
         }
-        div[data-testid="stButton"]:hover {
-            opacity: 1.0;
+        .stButton>button:hover {
+            background-color: rgba(0, 0, 0, 0.8);
+            border: 1px solid white;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -347,15 +355,33 @@ if bg_b64:
     if st.session_state.monitor_mode:
         # 全画面モード：画面いっぱいに広げ、アスペクト比を維持して中央配置
         html_content = f'''
-        <div style="display: flex; justify-content: center; align-items: center; width: 100%; height: 100vh; background-color: #e0e0e0;">
-            <div style="position: relative; max-width: 100%; max-height: 100%; aspect-ratio: {img_w} / {img_h};">
-                <img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: 100%; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.2);">
+        <div style="
+            position: relative; 
+            width: 100vw; 
+            height: 100vh; 
+            background-color: #000; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            overflow: hidden;
+        ">
+            <div style="position: relative; max-width: 100%; max-height: 100%;">
+                <img src="data:image/png;base64,{bg_b64}" style="max-width: 100vw; max-height: 100vh; object-fit: contain; display: block;">
         '''
     else:
         # 通常モード：今まで通り
         html_content = f'''
-        <div style="position: relative; display: inline-block; width: 100%; max-width: {img_w}px;">
-            <img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; border: 1px solid #ccc;">
+        <div style="
+            position: relative; 
+            width: 100%; 
+            max-width: {img_w}px; 
+            margin: 0 auto; 
+            border: 2px solid #ddd; 
+            border-radius: 8px; 
+            overflow: hidden; 
+            background-color: #f9f9f9;
+        ">
+            <img src="data:image/png;base64,{bg_b64}" style="width: 100%; height: auto; display: block;">
         '''
     
     if settings:
@@ -383,30 +409,39 @@ if bg_b64:
             ch1_color = get_color(ch1_unit)
             ch2_color = get_color(ch2_unit)
             
-            ch1_html = f'<div style="color: {ch1_color}; font-weight: bold; font-size: 1.1em;">{ch1_val}<span style="font-size: 0.8em;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
-            ch2_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.1em;">{ch2_val}<span style="font-size: 0.8em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
-            ch2_only_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.1em;">{ch2_val}<span style="font-size: 0.8em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+            ch1_html = f'<div style="color: {ch1_color}; font-weight: bold; font-size: 1.4em; line-height: 1.1;">{ch1_val}<span style="font-size: 0.6em;">{ch1_unit}</span></div>' if ch1_val != "--" else ""
+            ch2_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.4em; line-height: 1.1; margin-top: 4px;">{ch2_val}<span style="font-size: 0.6em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
+            ch2_only_html = f'<div style="color: {ch2_color}; font-weight: bold; font-size: 1.4em; line-height: 1.1;">{ch2_val}<span style="font-size: 0.6em;">{ch2_unit}</span></div>' if ch2_val != "--" else ""
             
             if mode == "ch1": content_html = ch1_html
             elif mode == "ch2": content_html = ch2_only_html
             else: content_html = ch1_html + ch2_html
             
             card_html = (
-                f'<div style="position: absolute; left: {left_pct}%; top: {top_pct}%; transform: translate(-50%, -50%); '
-                f'background-color: rgba(255, 255, 255, 0.9); border: 2px solid {border_color}; border-radius: 8px; '
-                f'padding: 6px 10px; box-shadow: {box_shadow}; text-align: center; min-width: 80px; z-index: 10;">'
-                f'<div style="font-size: 0.75em; color: #555; margin-bottom: 2px; border-bottom: 1px solid #ddd; padding-bottom: 2px;">{info["name"]}</div>'
-                f'<div style="line-height: 1.2;">{content_html}</div>'
+                f'<div style="'
+                f'position: absolute; left: {left_pct}%; top: {top_pct}%; '
+                f'transform: translate(-50%, -50%); '
+                f'background: rgba(255, 255, 255, 0.95); '
+                f'border: 2px solid {border_color}; '
+                f'border-radius: 8px; '
+                f'padding: 8px 12px; '
+                f'box-shadow: {box_shadow}; '
+                f'text-align: center; '
+                f'min-width: 100px; '
+                f'z-index: 10;'
+                f'">'
+                f'<div style="font-size: 0.8em; color: #555; margin-bottom: 4px; border-bottom: 1px solid #ddd; padding-bottom: 2px;">{info["name"]}</div>'
+                f'<div style="margin: 4px 0;">{content_html}</div>'
                 f'<div style="font-size: 0.65em; color: #888; margin-top: 4px;">{last_update}</div>'
                 f'</div>'
             )
             html_content += card_html
 
-    html_content += "</div>"
-    if st.session_state.monitor_mode:
         html_content += "</div>"
+        if st.session_state.monitor_mode:
+            html_content += "</div>"
         
-    st.markdown(html_content, unsafe_allow_html=True)
+        st.markdown(html_content, unsafe_allow_html=True)
 else:
     st.info(f"※左のメニューから「{current_floor}」の図面(画像またはPDF)をアップロードしてください")
 
