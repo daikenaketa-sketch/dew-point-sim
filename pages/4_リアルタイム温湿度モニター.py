@@ -7,6 +7,7 @@ import os
 import requests
 import fitz  # PDFを読み込むためのツール(PyMuPDF)
 import sys
+from streamlit_autorefresh import st_autorefresh  # ★追加：自動更新ライブラリを読み込む
 
 st.set_page_config(page_title="リアルタイム温湿度モニター", layout="wide")
 
